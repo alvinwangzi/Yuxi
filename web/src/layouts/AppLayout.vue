@@ -54,6 +54,13 @@ const { sidebarCollapsed } = storeToRefs(chatUIStore)
 const conversationSearchOpen = ref(false)
 const projectPendingId = ref(null)
 
+// 新建项目 modal：managed 模式自动在 projects 下创建专属目录，无需手选路径
+const createProjectModalOpen = ref(false)
+const creatingProject = ref(false)
+const newProjectName = ref('')
+const newProjectRequestId = ref('')
+const canCreateProject = computed(() => Boolean(newProjectName.value.trim()))
+
 // Provide settings modal methods to child components
 const openSettingsModal = (tab) => {
   settingsInitialTab.value = tab || (userStore.isAdmin ? 'base' : 'account')
@@ -246,6 +253,34 @@ const handleCreateProjectChat = async (projectId) => {
   if (!projectId || projectPendingId.value || threadCreationInFlight.value) return
   await router.push({ name: 'AgentComp', query: { project_id: projectId } })
   chatThreadsStore.setCurrentThreadId(null)
+}
+
+const handleOpenCreateProject = () => {
+  newProjectName.value = ''
+  newProjectRequestId.value =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  createProjectModalOpen.value = true
+}
+
+const handleCreateProject = async () => {
+  if (!canCreateProject.value) return
+  creatingProject.value = true
+  try {
+    const project = await projectApi.createProject({
+      requestId: newProjectRequestId.value,
+      name: newProjectName.value.trim(),
+      mode: 'managed'
+    })
+    projectsStore.upsertProject(project)
+    createProjectModalOpen.value = false
+    message.success('项目已创建')
+  } catch (error) {
+    message.error(error?.response?.data?.detail || error?.message || '项目创建失败')
+  } finally {
+    creatingProject.value = false
+  }
 }
 
 const searchWorkspace = (query) => searchWorkspaceFiles(query)
@@ -450,6 +485,7 @@ provide('settingsModal', {
           @toggle-pin="handleTogglePinChat"
           @rename-project="handleRenameProject"
           @delete-project="handleDeleteProject"
+          @create-project="handleOpenCreateProject"
           @create-project-chat="handleCreateProjectChat"
           @retry-projects="loadProjects"
           @load-more-chats="() => chatThreadsStore.loadMoreThreads()"
@@ -509,6 +545,31 @@ provide('settingsModal', {
       :initial-tab="settingsInitialTab"
       @close="() => (showSettingsModal = false)"
     />
+
+    <a-modal
+      v-model:open="createProjectModalOpen"
+      title="新建项目"
+      width="640px"
+      ok-text="创建"
+      cancel-text="取消"
+      :confirm-loading="creatingProject"
+      :ok-button-props="{ disabled: !canCreateProject }"
+      @ok="handleCreateProject"
+    >
+      <div class="project-form">
+        <label class="project-form-field">
+          <span>项目名称</span>
+          <a-input
+            v-model:value="newProjectName"
+            :maxlength="100"
+            autofocus
+            placeholder="例如：产品发布计划"
+            @press-enter="canCreateProject && handleCreateProject()"
+          />
+        </label>
+        <p class="project-form-hint">项目目录将自动创建在个人空间的 projects 文件夹下</p>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -942,5 +1003,25 @@ div.header,
       }
     }
   }
+}
+
+.project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.project-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.project-form-hint {
+  margin: 2px 0 0;
+  color: var(--color-text-secondary, #8a8f99);
+  font-size: 12px;
 }
 </style>

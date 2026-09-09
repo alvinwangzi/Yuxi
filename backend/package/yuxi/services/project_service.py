@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from fastapi import HTTPException
@@ -10,7 +11,11 @@ from sqlalchemy.exc import IntegrityError
 from yuxi.repositories.project_repository import ProjectRepository
 from yuxi.storage.postgres.models_business import Project
 from yuxi.utils.datetime_utils import utc_now_naive
-from yuxi.workspace.paths import allocate_default_user_workdir_path, normalize_workdir_path
+from yuxi.workspace.paths import (
+    allocate_default_user_workdir_path,
+    ensure_bound_user_workdir,
+    normalize_workdir_path,
+)
 from yuxi.workspace.workdir import Workdir
 
 MAX_PROJECT_NAME_LENGTH = 255
@@ -34,12 +39,27 @@ def _normalize_project_name(name: str | None, *, required: bool) -> str | None:
     return normalized_name or None
 
 
-def _require_matching_creation_intent(project: Project, *, name: str, workdir_path: str) -> None:
+def _require_matching_creation_intent(project: Project, *, name: str, workdir_path: str | None) -> None:
     """要求已有 Project 仍有效且匹配当前幂等创建意图。"""
     if project.status == "deleted":
         raise HTTPException(status_code=409, detail="request_id 已用于已删除的 Project")
+    if project.directory_mode == "managed":
+        # managed 的 workdir 由服务端分配，重放只比较名称与模式。
+        if project.name != name:
+            raise HTTPException(status_code=409, detail="request_id 已用于其他 Project 创建意图")
+        return
     if project.name != name or project.directory_mode != "linked" or project.workdir_path != workdir_path:
         raise HTTPException(status_code=409, detail="request_id 已用于其他 Project 创建意图")
+
+
+async def _materialize_bound_workdir(*, uid: str, project: Project) -> None:
+    """物化已提交数据库绑定的 managed 目录；失败显式报错，不把未就绪伪装为成功。"""
+    if project.directory_mode != "managed" or not project.workdir_path:
+        return
+    try:
+        await asyncio.to_thread(ensure_bound_user_workdir, uid, project.workdir_path)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="项目目录创建失败") from exc
 
 
 async def create_project_record(
@@ -103,31 +123,40 @@ async def create_implicit_project(*, uid: str, db, idempotency_key: str | None =
 async def create_project_view(
     *, uid: str, request_id: str, name: str, directory_mode: str, workdir_path: str | None, db
 ) -> dict:
-    """幂等创建 selectable Project。"""
+    """幂等创建 selectable Project；managed 模式自动分配目录并在提交后物化。"""
     normalized_request_id = (request_id or "").strip()
     if not normalized_request_id:
         raise HTTPException(status_code=422, detail="request_id 不能为空")
-    if directory_mode != "linked" or not (workdir_path or "").strip():
-        raise HTTPException(status_code=422, detail="手动创建项目必须选择目录")
+    normalized_name = _normalize_project_name(name, required=True)
+    normalized_path = None
+    if directory_mode == "managed":
+        if (workdir_path or "").strip():
+            raise HTTPException(status_code=422, detail="managed Project 不接受 workdir_path")
+    elif directory_mode == "linked":
+        if not (workdir_path or "").strip():
+            raise HTTPException(status_code=422, detail="手动创建项目必须选择目录")
+        try:
+            normalized_path = normalize_workdir_path(workdir_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=422, detail="directory_mode 必须是 managed 或 linked")
+
     repository = ProjectRepository(db)
     existing = await repository.get_by_idempotency_key(normalized_request_id, str(uid))
-    normalized_name = _normalize_project_name(name, required=True)
-    try:
-        normalized_path = normalize_workdir_path(workdir_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if existing is not None:
         _require_matching_creation_intent(
             existing,
             name=normalized_name,
             workdir_path=normalized_path,
         )
+        await _materialize_bound_workdir(uid=str(uid), project=existing)
         return existing.to_dict()
 
     try:
         project = await create_project_record(
             uid=uid,
-            name=name,
+            name=normalized_name,
             directory_mode=directory_mode,
             selection_status="selectable",
             workdir_path=workdir_path,
@@ -146,6 +175,7 @@ async def create_project_view(
             workdir_path=normalized_path,
         )
         project = replay
+    await _materialize_bound_workdir(uid=str(uid), project=project)
     return project.to_dict()
 
 

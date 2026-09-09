@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 7
+BUSINESS_SCHEMA_VERSION = 8
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -1127,12 +1127,14 @@ class PostgresManager(metaclass=SingletonMeta):
                 extra_json JSONB,
                 is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
                 is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
+                deleted_at TIMESTAMP WITHOUT TIME ZONE,
                 created_by VARCHAR(100),
                 updated_by VARCHAR(100),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             )
             """,
+            "ALTER TABLE IF EXISTS model_providers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITHOUT TIME ZONE",
             """
             CREATE TABLE IF NOT EXISTS subagent_threads (
                 id SERIAL PRIMARY KEY,

@@ -9,7 +9,7 @@ up:
 		echo "Error: .env file not found. Please create it from .env.template"; \
 		exit 1; \
 	fi
-	docker compose up -d
+	docker compose up -d --force-recreate
 
 down:
 	docker compose down
@@ -25,7 +25,7 @@ reset:
 	fi
 	docker compose down
 	rm -rf docker/volumes
-	docker compose up -d
+	docker compose up -d --force-recreate
 	@echo "Waiting for api to be ready..."
 	@until docker compose exec -T api true >/dev/null 2>&1; do sleep 2; done
 	$(MAKE) seed

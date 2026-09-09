@@ -140,14 +140,20 @@ async def test_implicit_project_uses_timestamped_managed_workdir(monkeypatch, tm
 
 
 @pytest.mark.parametrize(
-    ("directory_mode", "workdir_path"),
-    [("managed", None), ("managed", "clients/acme"), ("linked", None), ("linked", "")],
+    ("directory_mode", "workdir_path", "detail"),
+    [
+        ("managed", "clients/acme", "managed Project 不接受 workdir_path"),
+        ("linked", None, "手动创建项目必须选择目录"),
+        ("linked", "", "手动创建项目必须选择目录"),
+    ],
 )
-async def test_manual_project_requires_selected_directory(directory_mode: str, workdir_path: str | None):
+async def test_create_project_rejects_invalid_directory_inputs(
+    directory_mode: str, workdir_path: str | None, detail: str
+):
     with pytest.raises(HTTPException) as exc:
         await svc.create_project_view(
             uid="user-1",
-            request_id="request-manual-without-directory",
+            request_id="request-invalid-directory",
             name="Invalid",
             directory_mode=directory_mode,
             workdir_path=workdir_path,
@@ -155,7 +161,124 @@ async def test_manual_project_requires_selected_directory(directory_mode: str, w
         )
 
     assert exc.value.status_code == 422
-    assert exc.value.detail == "手动创建项目必须选择目录"
+    assert exc.value.detail == detail
+
+
+async def test_selectable_managed_project_auto_creates_directory(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("yuxi.workspace.paths.get_user_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "yuxi.workspace.paths.shanghai_now",
+        lambda: datetime.fromisoformat("2026-09-10T10:00:00+08:00"),
+    )
+    monkeypatch.setattr(svc.uuid, "uuid4", lambda: UUID("a1b2c3d4-e5f6-4789-8123-456789abcdef"))
+    db = _Db()
+
+    result = await svc.create_project_view(
+        uid="user-1",
+        request_id="request-managed-auto",
+        name="P2",
+        directory_mode="managed",
+        workdir_path=None,
+        db=db,
+    )
+
+    assert result["directory_mode"] == "managed"
+    assert result["workdir_path"] == "projects/2026-09-10_10-00-00_a1b2c3d4"
+    assert (user_workspace_dir("user-1") / result["workdir_path"]).is_dir()
+    assert db.commits == 1
+
+
+async def test_managed_project_replay_materializes_missing_directory(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("yuxi.workspace.paths.get_user_data_dir", lambda: tmp_path)
+    ensure_user_workspace("user-1")
+    workdir_path = "projects/2026-09-10_10-00-00_a1b2c3d4"
+    existing = SimpleNamespace(
+        id="project-1",
+        name="P2",
+        directory_mode="managed",
+        workdir_path=workdir_path,
+        status="selectable",
+        to_dict=lambda: {"id": "project-1", "workdir_path": workdir_path},
+    )
+
+    class _ProjectRepository:
+        def __init__(self, _db):
+            pass
+
+        async def get_by_idempotency_key(self, _key, _uid):
+            return existing
+
+    monkeypatch.setattr(svc, "ProjectRepository", _ProjectRepository)
+
+    result = await svc.create_project_view(
+        uid="user-1",
+        request_id="request-managed-auto",
+        name="P2",
+        directory_mode="managed",
+        workdir_path=None,
+        db=_Db(),
+    )
+
+    assert result["id"] == "project-1"
+    assert (user_workspace_dir("user-1") / workdir_path).is_dir()
+
+
+async def test_managed_project_replay_rejects_name_mismatch(monkeypatch):
+    existing = SimpleNamespace(
+        id="project-1",
+        name="P2",
+        directory_mode="managed",
+        workdir_path="projects/2026-09-10_10-00-00_a1b2c3d4",
+        status="selectable",
+    )
+
+    class _ProjectRepository:
+        def __init__(self, _db):
+            pass
+
+        async def get_by_idempotency_key(self, _key, _uid):
+            return existing
+
+    monkeypatch.setattr(svc, "ProjectRepository", _ProjectRepository)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.create_project_view(
+            uid="user-1",
+            request_id="request-managed-auto",
+            name="Other",
+            directory_mode="managed",
+            workdir_path=None,
+            db=_Db(),
+        )
+
+    assert exc.value.status_code == 409
+
+
+async def test_managed_project_materialize_failure_fails_request(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("yuxi.workspace.paths.get_user_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "yuxi.workspace.paths.shanghai_now",
+        lambda: datetime.fromisoformat("2026-09-10T10:00:00+08:00"),
+    )
+    monkeypatch.setattr(svc.uuid, "uuid4", lambda: UUID("a1b2c3d4-e5f6-4789-8123-456789abcdef"))
+
+    def _raise_os_error(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(svc, "ensure_bound_user_workdir", _raise_os_error)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.create_project_view(
+            uid="user-1",
+            request_id="request-managed-auto",
+            name="P2",
+            directory_mode="managed",
+            workdir_path=None,
+            db=_Db(),
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "项目目录创建失败"
 
 
 @pytest.mark.parametrize("path", ["/", "../outside", "/tmp/host"])

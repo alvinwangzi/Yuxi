@@ -71,8 +71,12 @@
           :key="entry.path"
           type="button"
           class="picker-row picker-directory"
-          :class="{ selected: isSelectedDirectory(entry.path) }"
+          :class="{
+            selected: isSelectedDirectory(entry.path),
+            blocked: isBlockedDirectory(entry)
+          }"
           :disabled="disabled"
+          :title="isBlockedDirectory(entry) ? '该目录不可选作项目目录' : null"
           @click="openDirectory(entry.path)"
         >
           <Folder :size="16" />
@@ -127,6 +131,7 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   includeUnboundProjectDirs: { type: Boolean, default: false },
   unselectableDirectories: { type: Array, default: () => ['/'] },
+  rootPath: { type: String, default: '/' },
   isFileSelectable: { type: Function, default: () => true }
 })
 const emit = defineEmits(['update:modelValue', 'loading-change'])
@@ -147,10 +152,14 @@ const normalizePath = (path) => {
 }
 
 const breadcrumbs = computed(() => {
-  const items = [{ name: 'Workspace', path: '/' }]
-  let path = ''
-  for (const name of currentPath.value.split('/').filter(Boolean)) {
-    path += `/${name}`
+  const root = rootPath.value
+  const items = [{ name: root === '/' ? 'Workspace' : root.slice(1), path: root }]
+  // 历史候选可能带出 root 之外的路径（如早期绑定在根下的目录），此时面包屑安全回退到根单项。
+  if (!isWithinRoot(currentPath.value)) return items
+  const relative = currentPath.value === root ? '' : currentPath.value.slice(root.length)
+  let path = root === '/' ? '' : root
+  for (const name of relative.split('/').filter(Boolean)) {
+    path = `${path}/${name}`
     items.push({ name, path })
   }
   return items
@@ -171,6 +180,13 @@ const hasVisibleEntries = computed(
 const blockedDirectorySet = computed(
   () => new Set(props.unselectableDirectories.map((path) => normalizePath(path)))
 )
+const rootPath = computed(() => normalizePath(props.rootPath))
+
+const isWithinRoot = (targetPath) => {
+  const root = rootPath.value
+  if (root === '/') return true
+  return targetPath === root || targetPath.startsWith(`${root}/`)
+}
 
 const getErrorMessage = (cause, fallback) =>
   cause?.response?.data?.detail || cause?.message || fallback
@@ -184,6 +200,9 @@ const formatFileSize = (size) => {
 
 const isSelectedDirectory = (path) =>
   props.selectionMode === 'directory' && selectedDirectory.value === normalizePath(path)
+
+const isBlockedDirectory = (entry) =>
+  props.selectionMode === 'directory' && blockedDirectorySet.value.has(normalizePath(entry.path))
 
 const loadEntries = async (path = currentPath.value) => {
   const version = ++requestVersion
@@ -215,6 +234,7 @@ const loadEntries = async (path = currentPath.value) => {
 
 const openDirectory = (path) => {
   const targetPath = normalizePath(path)
+  if (!isWithinRoot(targetPath)) return
   if (props.selectionMode === 'directory') {
     emit('update:modelValue', blockedDirectorySet.value.has(targetPath) ? '' : targetPath)
   }
@@ -277,7 +297,7 @@ watch(
     const initialPath =
       props.selectionMode === 'directory' && props.modelValue
         ? normalizePath(props.modelValue)
-        : '/'
+        : rootPath.value
     currentPath.value = initialPath
     void loadEntries(initialPath)
   },
@@ -457,9 +477,14 @@ watch(
   border-bottom: 0;
 }
 
-.picker-row:hover:not(.disabled),
-.picker-row.selected {
+.picker-row:hover:not(.disabled, .blocked),
+.picker-row.selected:not(.blocked) {
   background: var(--gray-25);
+}
+
+.picker-directory.blocked {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .picker-row:focus-visible,

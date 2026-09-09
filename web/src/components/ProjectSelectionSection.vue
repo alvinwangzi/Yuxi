@@ -169,15 +169,18 @@
         />
       </label>
 
-      <div class="project-form-field">
+      <div v-if="creationUsesLinkedPath" class="project-form-field">
         <span>项目目录</span>
         <WorkspacePathPicker
           v-model="linkedPath"
           :active="createModalOpen"
           :disabled="creatingProject"
+          root-path="/projects"
+          :unselectable-directories="['/', '/projects']"
           include-unbound-project-dirs
         />
       </div>
+      <p v-else class="project-form-hint">项目目录将自动创建在个人空间的 projects 文件夹下</p>
     </div>
   </a-modal>
 </template>
@@ -239,7 +242,7 @@ const requestId = () =>
 const getErrorMessage = (error, fallback) =>
   error?.response?.data?.detail || error?.message || fallback
 
-const canCreateProject = computed(() => Boolean(projectName.value.trim() && linkedPath.value))
+const canCreateProject = computed(() => Boolean(projectName.value.trim()))
 const isAutoOrEmpty = computed(() => !props.modelValue || props.modelValue === AUTO_PROJECT_ID)
 const currentProject = computed(() =>
   projects.value.find((project) => project.id === props.modelValue)
@@ -280,20 +283,24 @@ const openCreateModal = (selectedPath = '') => {
   dropdownOpen.value = false
   projectName.value = ''
   projectCreationRequestId.value = requestId()
+  // 传入预填目录（历史候选入口）走 linked 绑定；否则走 managed 自动创建。
   linkedPath.value = selectedPath
   createModalOpen.value = true
 }
+
+const creationUsesLinkedPath = computed(() => Boolean(linkedPath.value))
 
 const handleCreateProject = async () => {
   if (!canCreateProject.value) return
   creatingProject.value = true
   try {
-    const project = await projectApi.createProject({
+    const payload = {
       requestId: projectCreationRequestId.value,
       name: projectName.value.trim(),
-      mode: 'linked',
-      path: linkedPath.value
-    })
+      mode: creationUsesLinkedPath.value ? 'linked' : 'managed'
+    }
+    if (creationUsesLinkedPath.value) payload.path = linkedPath.value
+    const project = await projectApi.createProject(payload)
     addAndSelectProject(project)
     createModalOpen.value = false
     message.success('项目已创建')
@@ -670,6 +677,13 @@ onUnmounted(() => {
   color: var(--color-text);
   font-size: 13px;
   font-weight: 500;
+}
+
+.project-form-hint {
+  margin: 2px 0 0;
+  color: var(--color-text-secondary, #8a8f99);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .history-option-list {

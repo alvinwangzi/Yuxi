@@ -106,6 +106,7 @@ class ProvisionerSandboxProvider:
             token=sandbox_provisioner_token(),
             delete_timeout_seconds=get_int_env("SANDBOX_PROVISIONER_DELETE_TIMEOUT_SECONDS", 120),
         )
+        self._client.verify_credentials()
         self._lock = threading.Lock()
         # 活跃或等待中的调用者持有强引用；空闲作用域的锁自动回收。
         self._thread_locks: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()

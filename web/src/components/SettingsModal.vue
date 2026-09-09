@@ -48,6 +48,15 @@
           </div>
           <div
             class="sider-item"
+            :class="{ activesec: activeTab === 'modelProviders' }"
+            @click="activeTab = 'modelProviders'"
+            v-if="userStore.isAdmin"
+          >
+            <Boxes class="icon" :size="18" />
+            <span>模型供应商</span>
+          </div>
+          <div
+            class="sider-item"
             :class="{ activesec: activeTab === 'ocr' }"
             @click="activeTab = 'ocr'"
             v-if="userStore.isAdmin"
@@ -121,6 +130,14 @@
         </div>
         <div
           class="nav-item"
+          :class="{ active: activeTab === 'modelProviders' }"
+          @click="activeTab = 'modelProviders'"
+          v-if="userStore.isAdmin"
+        >
+          模型供应商
+        </div>
+        <div
+          class="nav-item"
           :class="{ active: activeTab === 'ocr' }"
           @click="activeTab = 'ocr'"
           v-if="userStore.isAdmin"
@@ -164,6 +181,10 @@
             <BasicSettingsSection />
           </div>
 
+          <div v-if="activeTab === 'modelProviders' && userStore.isAdmin">
+            <ModelProviderManagePanel />
+          </div>
+
           <div v-show="activeTab === 'ocr'" v-if="userStore.isAdmin">
             <OCRSettingsSection />
           </div>
@@ -185,6 +206,7 @@
 import { computed, ref, watch } from 'vue'
 import { useUserStore } from '@/stores/user'
 import {
+  Boxes,
   CircleUser,
   Settings,
   Key,
@@ -201,6 +223,7 @@ import OCRSettingsSection from '@/components/OCRSettingsSection.vue'
 import ApiKeyManagementComponent from '@/components/ApiKeyManagementComponent.vue'
 import UserManagementComponent from '@/components/UserManagementComponent.vue'
 import DepartmentManagementComponent from '@/components/DepartmentManagementComponent.vue'
+import ModelProviderManagePanel from '@/components/model-management/ModelProviderManagePanel.vue'
 
 const props = defineProps({
   visible: {
@@ -226,7 +249,7 @@ const visible = computed({
 const availableTabs = computed(() => {
   const tabs = []
   if (userStore.isLoggedIn) tabs.push('account', 'apiKeys', 'agentEnv')
-  if (userStore.isAdmin) tabs.push('base', 'ocr', 'user')
+  if (userStore.isAdmin) tabs.push('base', 'modelProviders', 'ocr', 'user')
   if (userStore.isSuperAdmin) tabs.push('department')
   return tabs
 })

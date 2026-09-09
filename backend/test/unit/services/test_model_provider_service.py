@@ -6,14 +6,18 @@ import pytest
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from yuxi.models.providers.builtin import BUILTIN_PROVIDERS
+from yuxi.models.providers.repository import delete_model_provider as repository_delete_model_provider
 from yuxi.models.providers.service import (
     _normalize_payload,
     _normalize_remote_model,
     _validate_request_body_overrides_scope,
     check_credential_status,
+    create_provider_config,
+    ensure_builtin_model_providers_in_db,
     fetch_remote_models,
     update_provider_config,
 )
+from yuxi.utils.datetime_utils import utc_now_naive
 
 
 def test_normalize_payload_accepts_enabled_chat_model():
@@ -352,3 +356,110 @@ def test_normalize_payload_allows_model_type_within_capabilities():
     sources = [model["source"] for model in payload["enabled_models"]]
     assert types == ["chat", "embedding"]
     assert sources == ["manual", "manual"]
+
+
+# ==================== 内置供应商墓碑机制 ====================
+
+
+class _FakeSession:
+    """记录 delete 与 flush 调用的最小 AsyncSession 替身。"""
+
+    def __init__(self):
+        self.deleted = []
+
+    async def flush(self):
+        return None
+
+    async def delete(self, obj):
+        self.deleted.append(obj)
+
+
+@pytest.mark.asyncio
+async def test_repository_delete_builtin_provider_keeps_tombstone_row():
+    """内置供应商删除时保留墓碑行；非内置供应商物理删除。"""
+    db = _FakeSession()
+    builtin_provider = SimpleNamespace(provider_id="siliconflow-cn", is_builtin=True, deleted_at=None)
+
+    await repository_delete_model_provider(db, builtin_provider)
+
+    assert builtin_provider.deleted_at is not None
+    assert db.deleted == []
+
+    non_builtin = SimpleNamespace(provider_id="custom-local", is_builtin=False, deleted_at=None)
+    await repository_delete_model_provider(db, non_builtin)
+
+    assert db.deleted == [non_builtin]
+
+
+@pytest.mark.asyncio
+async def test_ensure_builtin_providers_skip_tombstoned_provider(monkeypatch):
+    """管理员删除内置供应商后留下的墓碑行，启动 ensure 不得复活该供应商。"""
+    tombstoned_id = BUILTIN_PROVIDERS[0]["provider_id"]
+    created = []
+
+    async def fake_list_model_providers(db):
+        return []
+
+    async def fake_get_model_provider_with_tombstone(db, provider_id):
+        if provider_id == tombstoned_id:
+            return SimpleNamespace(provider_id=provider_id, deleted_at=utc_now_naive())
+        return None
+
+    async def fake_create_model_provider(db, data):
+        created.append(data["provider_id"])
+        return SimpleNamespace(provider_id=data["provider_id"])
+
+    monkeypatch.setattr("yuxi.models.providers.service.list_model_providers", fake_list_model_providers)
+    monkeypatch.setattr(
+        "yuxi.models.providers.service.get_model_provider_with_tombstone",
+        fake_get_model_provider_with_tombstone,
+    )
+    monkeypatch.setattr("yuxi.models.providers.service.create_model_provider", fake_create_model_provider)
+
+    await ensure_builtin_model_providers_in_db(None)
+
+    assert tombstoned_id not in created
+    assert len(created) == len(BUILTIN_PROVIDERS) - 1
+
+
+@pytest.mark.asyncio
+async def test_create_provider_config_purges_tombstone_before_recreate(monkeypatch):
+    """重建同 id 内置供应商前必须先物理清除墓碑行，否则唯一键冲突。"""
+    tombstone = SimpleNamespace(provider_id="siliconflow-cn", deleted_at=utc_now_naive())
+    purged = []
+
+    async def fake_get_model_provider(db, provider_id):
+        return None
+
+    async def fake_get_model_provider_with_tombstone(db, provider_id):
+        return tombstone if provider_id == "siliconflow-cn" else None
+
+    async def fake_purge_model_provider(db, provider):
+        purged.append(provider)
+
+    async def fake_create_model_provider(db, data):
+        assert purged == [tombstone], "应先清除墓碑再创建"
+        return SimpleNamespace(**data)
+
+    monkeypatch.setattr("yuxi.models.providers.service.get_model_provider", fake_get_model_provider)
+    monkeypatch.setattr(
+        "yuxi.models.providers.service.get_model_provider_with_tombstone",
+        fake_get_model_provider_with_tombstone,
+    )
+    monkeypatch.setattr("yuxi.models.providers.service.purge_model_provider", fake_purge_model_provider)
+    monkeypatch.setattr("yuxi.models.providers.service.create_model_provider", fake_create_model_provider)
+
+    result = await create_provider_config(
+        None,
+        {
+            "provider_id": "siliconflow-cn",
+            "display_name": "SiliconFlow",
+            "base_url": "https://api.siliconflow.cn/v1",
+            "capabilities": ["chat"],
+            "enabled_models": [{"id": "Qwen/Qwen3-8B", "type": "chat", "source": "manual"}],
+        },
+        "admin",
+    )
+
+    assert purged == [tombstone]
+    assert result.provider_id == "siliconflow-cn"

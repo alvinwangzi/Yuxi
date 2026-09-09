@@ -44,6 +44,20 @@ class ProvisionerClient:
         response = self._request("GET", "/health")
         return response.status_code == 200
 
+    def verify_credentials(self) -> None:
+        """用认证端点校验 token 有效性，401 时抛出明确错误。"""
+        response = self._request("GET", "/api/sandboxes")
+        if response.status_code == 401:
+            raise RuntimeError(
+                "sandbox provisioner rejected credentials (401). "
+                "This usually means the container has stale environment variables. "
+                "Run `docker compose up -d --force-recreate` to reload .env into all containers."
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"sandbox provisioner credential probe failed: {response.status_code} {response.text}"
+            )
+
     def create(
         self,
         sandbox_id: str,

@@ -14,7 +14,9 @@ from yuxi.models.providers.repository import (
     create_model_provider,
     delete_model_provider,
     get_model_provider,
+    get_model_provider_with_tombstone,
     list_model_providers,
+    purge_model_provider,
     update_model_provider,
 )
 from yuxi.storage.postgres.models_business import ModelProvider
@@ -287,7 +289,8 @@ async def get_model_provider_by_id(db: AsyncSession, provider_id: str) -> ModelP
 async def ensure_builtin_model_providers_in_db(db: AsyncSession) -> None:
     """确保独立模型配置模块的内置 provider 模板存在。
 
-    这里只补不存在的内置 provider，不覆盖管理员已编辑的配置。
+    这里只补不存在的内置 provider，不覆盖管理员已编辑的配置；
+    被管理员删除的内置 provider 保留墓碑行，不再重新创建。
     """
     existing = await list_model_providers(db)
     existing_ids = {p.provider_id: p for p in existing}
@@ -301,6 +304,10 @@ async def ensure_builtin_model_providers_in_db(db: AsyncSession) -> None:
                 existing_provider.capabilities = provider_def.get("capabilities") or existing_provider.capabilities
                 existing_provider.updated_by = "system"
                 await db.flush()
+            continue
+
+        # 墓碑行表示管理员已显式删除该内置供应商，启动时不得复活。
+        if await get_model_provider_with_tombstone(db, provider_id):
             continue
 
         payload = {key: value for key, value in provider_def.items() if value is not None}
@@ -319,6 +326,10 @@ async def create_provider_config(db: AsyncSession, data: dict[str, Any], usernam
     payload = _normalize_payload(data)
     if await get_model_provider(db, payload["provider_id"]):
         raise ValueError(f"供应商 {payload['provider_id']} 已存在")
+    # 同 id 的内置墓碑行占用唯一键，重建前先物理清除。
+    tombstone = await get_model_provider_with_tombstone(db, payload["provider_id"])
+    if tombstone:
+        await purge_model_provider(db, tombstone)
     payload["created_by"] = username
     payload["updated_by"] = username
     return await create_model_provider(db, payload)

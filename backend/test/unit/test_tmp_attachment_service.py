@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import os
 import tempfile
@@ -654,3 +655,52 @@ async def test_delete_thread_attachment_does_not_delete_bytes_before_metadata_co
         )
 
     assert backend.files == {_scope_path(original): b"pdf"}
+
+
+@pytest.mark.asyncio
+async def test_store_chat_image_attachment_writes_workdir_upload():
+    backend = FakeWorkdirStorage()
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"payload"
+
+    record = await service.store_chat_image_attachment(
+        workdir=FakeWorkdir(backend),
+        request_id="req-abc12345-6789",
+        image_content=base64.b64encode(png_bytes).decode("ascii"),
+    )
+
+    assert record is not None
+    assert record["file_name"] == "image-req-abc12345.png"
+    assert record["status"] == "uploaded"
+    assert record["original_path"] == record["path"]
+    assert backend.files[_scope_path(record["path"])] == png_bytes
+
+
+@pytest.mark.asyncio
+async def test_store_chat_image_attachment_rejects_invalid_base64():
+    backend = FakeWorkdirStorage()
+
+    record = await service.store_chat_image_attachment(
+        workdir=FakeWorkdir(backend), request_id="req-1", image_content="not-base64!!"
+    )
+
+    assert record is None
+    assert backend.files == {}
+
+
+@pytest.mark.asyncio
+async def test_store_chat_image_attachment_degrades_on_write_failure(monkeypatch):
+    workdir = FakeWorkdir(FakeWorkdirStorage())
+
+    def _raise(self, scope, source_path, *, overwrite=True):
+        del scope, source_path, overwrite
+        raise PermissionError("disk full")
+
+    monkeypatch.setattr(FakeWorkdir, "copy_file_from_path", _raise)
+
+    record = await service.store_chat_image_attachment(
+        workdir=workdir,
+        request_id="req-1",
+        image_content=base64.b64encode(b"\xff\xd8\xffjpeg-bytes").decode("ascii"),
+    )
+
+    assert record is None

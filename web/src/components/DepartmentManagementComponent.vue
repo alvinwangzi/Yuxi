@@ -374,6 +374,19 @@ const handleDepartmentFormSubmit = async () => {
       return
     }
 
+    // 管理员信息仅在创建部门时填写，编辑模式不渲染这些字段
+    if (departmentManagement.editMode) {
+      departmentManagement.loading = true
+      await departmentApi.updateDepartment(departmentManagement.editDepartmentId, {
+        name: departmentManagement.form.name.trim(),
+        description: departmentManagement.form.description.trim() || undefined
+      })
+      notification.success({ message: '部门更新成功' })
+      await fetchDepartments()
+      departmentManagement.modalVisible = false
+      return
+    }
+
     // 验证管理员UID
     const adminUid = departmentManagement.form.adminUid.trim()
     if (!adminUid) {
@@ -425,25 +438,16 @@ const handleDepartmentFormSubmit = async () => {
 
     departmentManagement.loading = true
 
-    if (departmentManagement.editMode) {
-      // 更新部门
-      await departmentApi.updateDepartment(departmentManagement.editDepartmentId, {
-        name: departmentManagement.form.name.trim(),
-        description: departmentManagement.form.description.trim() || undefined
-      })
-      notification.success({ message: '部门更新成功' })
-    } else {
-      // 创建部门，同时创建管理员
-      await departmentApi.createDepartment({
-        name: departmentManagement.form.name.trim(),
-        description: departmentManagement.form.description.trim() || undefined,
-        admin_uid: adminUid,
-        admin_password: departmentManagement.form.adminPassword,
-        admin_phone: departmentManagement.form.adminPhone || undefined
-      })
+    // 创建部门，同时创建管理员
+    await departmentApi.createDepartment({
+      name: departmentManagement.form.name.trim(),
+      description: departmentManagement.form.description.trim() || undefined,
+      admin_uid: adminUid,
+      admin_password: departmentManagement.form.adminPassword,
+      admin_phone: departmentManagement.form.adminPhone || undefined
+    })
 
-      message.success(`部门创建成功，管理员 "${adminUid}" 已创建`)
-    }
+    message.success(`部门创建成功，管理员 "${adminUid}" 已创建`)
 
     // 重新获取部门列表
     await fetchDepartments()

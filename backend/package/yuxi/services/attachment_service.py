@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import binascii
 import os
 import tempfile
 import uuid
@@ -171,6 +173,53 @@ async def _write_workdir_file(workdir, path: str, content: bytes) -> None:
                 os.unlink(temp_path)
             except FileNotFoundError:
                 pass
+
+
+def _image_extension(data: bytes) -> str:
+    """按图片魔数推断扩展名，未知格式默认 .jpg。"""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith(b"GIF8"):
+        return ".gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return ".jpg"
+
+
+async def store_chat_image_attachment(*, workdir, request_id: str, image_content: str) -> dict | None:
+    """把聊天内嵌 base64 图片落盘到 Project Workdir uploads/；失败返回 None，不阻断对话。
+
+    文件名以 request_id 为前缀，保证同一请求重放时覆盖同一文件而非产生重复副本。
+    """
+    try:
+        raw = base64.b64decode(image_content, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        logger.warning(f"聊天图片 base64 解码失败: {exc}")
+        return None
+    if not raw:
+        return None
+    file_id = uuid.uuid4().hex
+    stem = (request_id or "").strip()[:12] or file_id[:12]
+    file_name = f"image-{stem}{_image_extension(raw)}"
+    scope = f"/uploads/{file_name}"
+    try:
+        await _write_workdir_file(workdir, scope, raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"聊天图片写入 Workdir 失败: {exc}")
+        return None
+    path = runtime_path_for_workdir_scope(workdir.relative_path, scope)
+    return {
+        "file_id": file_id,
+        "file_name": file_name,
+        "file_type": None,
+        "file_size": len(raw),
+        "status": "uploaded",
+        "uploaded_at": utc_isoformat(),
+        "path": path,
+        "original_path": path,
+    }
 
 
 async def _store_attachment(

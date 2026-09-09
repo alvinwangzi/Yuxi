@@ -2,10 +2,7 @@
   <section class="conversation-nav-section" :class="{ collapsed }">
     <div v-if="showHistory && !collapsed" class="history-panel">
       <div class="conversation-list">
-        <section
-          v-if="projectsLoading || projectsError || projectGroups.length"
-          class="history-group project-history-group"
-        >
+        <section class="history-group project-history-group">
           <button
             type="button"
             class="history-label"
@@ -18,6 +15,16 @@
               class="collapse-icon"
               :class="{ collapsed: !projectsExpanded }"
             />
+            <span
+              type="button"
+              class="project-section-add"
+              role="button"
+              aria-label="新建项目"
+              title="新建项目"
+              @click.stop="$emit('create-project')"
+            >
+              <Plus :size="14" />
+            </span>
           </button>
           <CollapseTransition>
             <div v-if="projectsExpanded" class="project-list">
@@ -27,6 +34,9 @@
                 <button type="button" @click="$emit('retry-projects')">重试</button>
               </div>
               <template v-else>
+                <div v-if="!projectGroups.length" class="list-state">
+                  暂无项目，点击右上角 + 新建
+                </div>
                 <section
                   v-for="group in projectGroups"
                   :key="group.project.id"
@@ -215,6 +225,7 @@ const emit = defineEmits([
   'load-more-chats',
   'rename-project',
   'delete-project',
+  'create-project',
   'create-project-chat',
   'retry-projects'
 ])
@@ -306,7 +317,8 @@ const confirmDeleteProject = (project) => {
   text-align: left;
   &:hover,
   &:focus-visible {
-    .collapse-icon {
+    .collapse-icon,
+    .project-section-add {
       opacity: 1;
     }
   }
@@ -322,6 +334,23 @@ const confirmDeleteProject = (project) => {
     transform 0.2s ease;
   &.collapsed {
     transform: rotate(-90deg);
+  }
+}
+.project-section-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--gray-500);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  &:hover {
+    background: var(--gray-100);
+    color: var(--gray-800);
   }
 }
 .conversation-list {

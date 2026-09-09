@@ -139,20 +139,6 @@ BUILTIN_PROVIDERS: list[dict[str, Any]] = [
         "models_endpoint": "https://api.moonshot.ai/v1/models",
     },
     {
-        "provider_id": "minimax-cn",
-        "display_name": "MiniMax",
-        "base_url": "https://api.minimaxi.com/v1",
-        "api_key_env": "MINIMAX_API_KEY",
-        "models_endpoint": "https://api.minimaxi.com/v1/models",
-    },
-    {
-        "provider_id": "minimax",
-        "display_name": "MiniMax (International)",
-        "base_url": "https://api.minimax.io/v1",
-        "api_key_env": "MINIMAX_API_KEY",
-        "models_endpoint": "https://api.minimax.io/v1/models",
-    },
-    {
         "provider_id": "openrouter",
         "display_name": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",

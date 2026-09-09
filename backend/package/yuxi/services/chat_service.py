@@ -34,7 +34,7 @@ from yuxi.repositories.conversation_repository import ConversationRepository
 from yuxi.repositories.model_message_audit_repository import ModelMessageAuditRepository
 from yuxi.repositories.subagent_thread_repository import SubagentThreadRepository
 from yuxi.repositories.tool_message_audit_repository import ToolMessageAuditRepository
-from yuxi.services.attachment_service import serialize_attachment
+from yuxi.services.attachment_service import serialize_attachment, store_chat_image_attachment
 from yuxi.services.input_message_service import AgentRunInputMessage
 from yuxi.services.langfuse_service import (
     LangfuseRunContext,
@@ -47,7 +47,10 @@ from yuxi.services.project_service import create_implicit_project
 from yuxi.services.run_queue_service import publish_cancel_signals
 from yuxi.services.subagent_run_service import serialize_subagent_run_state
 from yuxi.services.tool_message_audit_service import ToolMessageAuditCollector
-from yuxi.services.workdir_service import resolve_conversation_workdir_path
+from yuxi.services.workdir_service import (
+    resolve_authorized_conversation_workdir,
+    resolve_conversation_workdir_path,
+)
 from yuxi.storage.postgres.manager import pg_manager
 from yuxi.storage.postgres.models_business import MODEL_AUDIT_MESSAGE_TYPE, Agent, User
 from yuxi.utils.datetime_utils import utc_now_naive
@@ -1214,6 +1217,24 @@ async def stream_agent_chat(
         thread_attachments = [
             serialize_attachment(attachment, thread_id=thread_id) for attachment in thread_attachment_records
         ]
+        # 内嵌图片只存在于消息 base64 中，落盘到 Project Workdir 后 agent 文件工具才能访问。
+        image_attachment = None
+        if image_content:
+            try:
+                image_binding = await resolve_authorized_conversation_workdir(
+                    conversation=attachment_conversation,
+                    uid=uid,
+                    db=db,
+                )
+                image_attachment = await store_chat_image_attachment(
+                    workdir=image_binding.workdir,
+                    request_id=str(meta.get("request_id") or ""),
+                    image_content=image_content,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"聊天图片落盘失败，本轮仅以多模态输入提供图片: {exc}")
+        if image_attachment:
+            thread_attachments = [*thread_attachments, image_attachment]
         messages = [_with_attachment_context(human_message, thread_attachments)]
 
         init_msg = {
