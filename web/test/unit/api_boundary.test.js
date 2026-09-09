@@ -227,6 +227,29 @@ test('用户 Store 的普通错误传播链不附着或记录服务端任意响�
   })
 })
 
+test('400 字符串 detail 优先使用服务端消息而非泛化提示', async () => {
+  await withServer(async (server) => {
+    storageValues.set('user_token', 'test-token')
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({ detail: '不能在 projects 目录内直接创建文件或文件夹' }),
+        {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        }
+      )
+
+    setActivePinia(createPinia())
+    const { apiPost } = await server.ssrLoadModule('/src/apis/base.js')
+
+    await assert.rejects(apiPost('/api/workspace/directory', {}), (error) => {
+      assert.equal(error.status, 400)
+      assert.equal(error.message, '不能在 projects 目录内直接创建文件或文件夹')
+      return true
+    })
+  })
+})
+
 test('用户管理分页 API 只请求当前页并编码服务端筛选条件', async () => {
   await withServer(async (server) => {
     storageValues.set('user_token', 'test-token')

@@ -13,6 +13,7 @@ EMBEDDING_RATE_LIMIT_MAX_RETRIES = 10
 EMBEDDING_TRANSIENT_MAX_RETRIES = 2
 EMBEDDING_RETRY_MAX_DELAY_SECONDS = 10.0
 EMBEDDING_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+EMBEDDING_DEFAULT_BATCH_SIZE = 10
 
 
 class BaseEmbeddingModel(ABC):
@@ -25,14 +26,14 @@ class BaseEmbeddingModel(ABC):
         base_url=None,
         api_key=None,
         model_id=None,
-        batch_size=40,
+        batch_size=EMBEDDING_DEFAULT_BATCH_SIZE,
     ):
         base_url = base_url or url
         self.model = model or name or model_id
         self.dimension = dimension
         self.base_url = get_docker_safe_url(base_url)
         self.api_key = os.getenv(api_key, api_key)
-        self.batch_size = int(batch_size or 40)
+        self.batch_size = int(batch_size or EMBEDDING_DEFAULT_BATCH_SIZE)
         self.embed_state = {}
 
     @abstractmethod
@@ -60,7 +61,16 @@ class BaseEmbeddingModel(ABC):
         for i in range(0, len(messages), batch_size):
             group_msg = messages[i : i + batch_size]
             logger.info(f"Encoding [{i}/{len(messages)}] messages (bsz={batch_size})")
-            response = self.encode(group_msg)
+            try:
+                response = self.encode(group_msg)
+            except Exception:
+                if len(group_msg) > 1:
+                    logger.warning(
+                        "Embedding batch of %d failed, splitting into sub-batches", len(group_msg)
+                    )
+                    response = self._split_encode(group_msg)
+                else:
+                    raise
             data.extend(response)
             if task_id:
                 self.embed_state[task_id]["progress"] = i + len(group_msg)
@@ -68,6 +78,22 @@ class BaseEmbeddingModel(ABC):
         if task_id:
             self.embed_state[task_id]["status"] = "completed"
 
+        return data
+
+    def _split_encode(self, messages: list[str]) -> list[list[float]]:
+        """递归减半批次重试，直到单条也失败则抛出。"""
+        half = max(len(messages) // 2, 1)
+        data = []
+        for i in range(0, len(messages), half):
+            sub = messages[i : i + half]
+            logger.info(f"Sub-batch encoding {len(sub)} messages")
+            try:
+                data.extend(self.encode(sub))
+            except Exception:
+                if len(sub) > 1:
+                    data.extend(self._split_encode(sub))
+                else:
+                    raise
         return data
 
     async def abatch_encode(self, messages: list[str], batch_size: int | None = None) -> list[list[float]]:
@@ -81,7 +107,16 @@ class BaseEmbeddingModel(ABC):
         for i in range(0, len(messages), batch_size):
             group_msg = messages[i : i + batch_size]
             logger.info(f"Async encoding [{i}/{len(messages)}] messages (bsz={batch_size})")
-            res = await self.aencode(group_msg)
+            try:
+                res = await self.aencode(group_msg)
+            except Exception:
+                if len(group_msg) > 1:
+                    logger.warning(
+                        "Embedding batch of %d failed, splitting into sub-batches", len(group_msg)
+                    )
+                    res = await self._asplit_encode(group_msg)
+                else:
+                    raise
             data.extend(res)
             if task_id:
                 self.embed_state[task_id]["progress"] = i + len(group_msg)
@@ -89,6 +124,22 @@ class BaseEmbeddingModel(ABC):
         if task_id:
             self.embed_state[task_id]["status"] = "completed"
 
+        return data
+
+    async def _asplit_encode(self, messages: list[str]) -> list[list[float]]:
+        """递归减半批次重试，直到单条也失败则抛出。"""
+        half = max(len(messages) // 2, 1)
+        data = []
+        for i in range(0, len(messages), half):
+            sub = messages[i : i + half]
+            logger.info(f"Async sub-batch encoding {len(sub)} messages")
+            try:
+                data.extend(await self.aencode(sub))
+            except Exception:
+                if len(sub) > 1:
+                    data.extend(await self._asplit_encode(sub))
+                else:
+                    raise
         return data
 
     async def test_connection(self) -> tuple[bool, str]:

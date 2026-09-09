@@ -166,7 +166,7 @@ async def _compress_agent_checkpoint(*, agent, input_context: dict[str, Any]) ->
     context = agent.context_schema()
     context.update_from_dict(input_context)
     graph = await agent.get_graph(context=context)
-    compressor = create_summary_middleware_from_context(
+    compressor = await create_summary_middleware_from_context(
         context,
         backend=create_agent_composite_backend(context),
     )

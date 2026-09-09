@@ -30,11 +30,10 @@ def load_chat_model(fully_specified_name: str | None, *, session_id: str | None 
 
     info = model_cache.get_model_info(fully_specified_name)
     if not info:
-        available_specs = model_cache.get_all_specs("chat")
-        available_ids = [item.spec for item in available_specs[:10]]
         raise ValueError(
             f"Unknown model spec: '{fully_specified_name}'. "
-            f"Available chat models ({len(available_specs)}): {available_ids}"
+            f"Available chat models ({len(model_cache.get_all_specs('chat'))}): "
+            f"{[item.spec for item in model_cache.get_all_specs('chat')[:10]]}"
         )
 
     if info.model_type != "chat":
@@ -247,6 +246,31 @@ def select_model(model_spec: str, **kwargs) -> LangChainChatAdapter:
         base_url=info.base_url,
         info={"provider_type": info.provider_type, "provider_id": info.provider_id},
     )
+
+
+async def async_load_chat_model(
+    fully_specified_name: str | None, *, session_id: str | None = None, **kwargs
+) -> BaseChatModel:
+    """异步版 load_chat_model，缓存未命中时自动从数据库重建。"""
+    fully_specified_name = resolve_chat_model_spec(fully_specified_name)
+
+    info = model_cache.get_model_info(fully_specified_name)
+    if not info:
+        count = await model_cache.async_rebuild_from_db()
+        if count > 0:
+            logger.info(f"Model cache auto-recovered: {count} models rebuilt from DB")
+            info = model_cache.get_model_info(fully_specified_name)
+
+    if not info:
+        available_specs = model_cache.get_all_specs("chat")
+        available_ids = [item.spec for item in available_specs[:10]]
+        raise ValueError(
+            f"Unknown model spec: '{fully_specified_name}'. "
+            f"Available chat models ({len(available_specs)}): {available_ids}"
+        )
+
+    # load_chat_model 仅构造 Pydantic 模型对象，无阻塞 I/O，可直接在 async 上下文调用。
+    return load_chat_model(fully_specified_name, session_id=session_id, **kwargs)
 
 
 if __name__ == "__main__":

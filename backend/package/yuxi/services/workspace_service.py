@@ -37,6 +37,17 @@ MAX_WORKSPACE_DOWNLOAD_SIZE_BYTES = 1024 * 1024 * 1024
 # 搜索返回条数上限，避免超大工作区一次性返回过多结果
 WORKSPACE_SEARCH_MAX_RESULTS = 100
 WORKSPACE_SCOPE_ROOT = "/"
+_PROJECTS_DIR = "projects"
+
+
+def _reject_projects_subtree_write(workspace_path: str) -> None:
+    """projects/ 子树由 Project 系统管理，拒绝直接写入。"""
+    stripped = workspace_path.strip("/")
+    if stripped == _PROJECTS_DIR or stripped.startswith(f"{_PROJECTS_DIR}/"):
+        raise HTTPException(
+            status_code=400,
+            detail="不能在 projects 目录内直接创建文件或文件夹，请通过项目管理功能创建",
+        )
 
 
 async def search_workspace_files(*, query: str, current_user: User) -> dict:
@@ -235,6 +246,7 @@ async def create_workspace_directory(*, parent_path: str, name: str, current_use
     backend = _workspace_backend(current_user)
     directory_name = _validate_child_name(name, field_name="文件夹名")
     virtual_parent = _workspace_path(parent_path)
+    _reject_projects_subtree_write(virtual_parent)
     target = f"{virtual_parent.rstrip('/')}/{directory_name}"
 
     try:
@@ -262,6 +274,7 @@ async def upload_workspace_files(*, parent_path: str, files: list[UploadFile], c
 
     backend = _workspace_backend(current_user)
     parent = _workspace_path(parent_path)
+    _reject_projects_subtree_write(parent)
     try:
         parent_stat = await asyncio.to_thread(backend.stat_authorized_path, parent, root=WORKSPACE_SCOPE_ROOT)
     except FileNotFoundError as exc:

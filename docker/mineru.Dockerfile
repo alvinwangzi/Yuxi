@@ -4,8 +4,10 @@
 # support x86_64 architecture and ARM(AArch64) architecture
 FROM docker.m.daocloud.io/vllm/vllm-openai:v0.11.2
 
-# Install libgl for opencv support & Noto fonts for Chinese characters
-RUN apt-get update && \
+# Replace Ubuntu apt sources with Aliyun mirror for China, then install dependencies
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.ubuntu.com/ubuntu|https://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y \
         fonts-noto-core \
         fonts-noto-cjk \

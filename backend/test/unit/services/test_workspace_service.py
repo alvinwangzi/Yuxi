@@ -437,3 +437,48 @@ def test_workspace_entry_preserves_v071_virtual_path_contract() -> None:
     assert root["virtual_path"] == "/home/gem/user-data"
     assert directory["path"] == "/notes/"
     assert directory["virtual_path"] == "/home/gem/user-data/notes/"
+
+
+@pytest.mark.parametrize(
+    "workspace_path",
+    ["/projects", "/projects/", "/projects/sub", "/projects/sub/deep"],
+)
+def test_reject_projects_subtree_write_blocks_projects_paths(workspace_path: str) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        svc._reject_projects_subtree_write(workspace_path)
+    assert exc_info.value.status_code == 400
+    assert "projects" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "workspace_path",
+    ["/", "/notes", "/notes/projects", "/agents", ""],
+)
+def test_reject_projects_subtree_write_allows_non_projects_paths(workspace_path: str) -> None:
+    svc._reject_projects_subtree_write(workspace_path)
+
+
+async def test_create_workspace_directory_rejects_projects_parent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("YUXI_USER_DATA_DIR", str(tmp_path / "threads"))
+    monkeypatch.setattr(svc, "_workspace_backend", lambda _user: SimpleNamespace())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.create_workspace_directory(
+            parent_path="/projects",
+            name="test-folder",
+            current_user=_user(),
+        )
+    assert exc_info.value.status_code == 400
+
+
+async def test_create_workspace_directory_rejects_projects_subdir_parent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("YUXI_USER_DATA_DIR", str(tmp_path / "threads"))
+    monkeypatch.setattr(svc, "_workspace_backend", lambda _user: SimpleNamespace())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.create_workspace_directory(
+            parent_path="/projects/existing",
+            name="test-folder",
+            current_user=_user(),
+        )
+    assert exc_info.value.status_code == 400

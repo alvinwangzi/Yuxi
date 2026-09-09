@@ -41,7 +41,7 @@ def _model_spec(provider: ModelProvider, model: dict[str, Any]) -> dict[str, Any
         "api_key": api_key,
         "base_url": model.get("base_url_override") or provider.base_url,
         "dimension": model.get("dimension"),
-        "batch_size": int(model.get("batch_size") or 40),
+        "batch_size": int(model.get("batch_size") or 10),
         "parameters": model.get("extra", {}).get("parameters", {}),
     }
 

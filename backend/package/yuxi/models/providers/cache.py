@@ -42,7 +42,7 @@ class ModelInfo:
 
     # Embedding 专属
     dimension: int | None = None
-    batch_size: int = 40
+    batch_size: int = 10
 
     @property
     def spec(self) -> str:
@@ -78,7 +78,7 @@ class ModelInfo:
             extra=data.get("extra", {}),
             request_body_overrides=data.get("request_body_overrides", {}),
             dimension=data.get("dimension"),
-            batch_size=data.get("batch_size", 40),
+            batch_size=data.get("batch_size", 10),
         )
 
 
@@ -98,8 +98,10 @@ class ModelCache:
             with sync_redis_client() as redis_client:
                 raw = redis_client.get(REDIS_CACHE_KEY)
             if not raw:
+                # Redis 缓存为空时不缓存空结果到本地，使每次调用都重试 Redis，
+                # 等待其他进程（如 lifespan）重建缓存后自动恢复。
                 self._local_cache = {}
-                self._local_cache_at = now
+                self._local_cache_at = 0.0
                 return {}
 
             items = json.loads(raw)
@@ -162,7 +164,7 @@ class ModelCache:
                     extra=dict(provider.extra_json or {}),
                     request_body_overrides=dict(model.get("request_body_overrides") or {}),
                     dimension=model.get("dimension"),
-                    batch_size=model.get("batch_size", 40),
+                    batch_size=model.get("batch_size", 10),
                 )
                 new_cache[info.spec] = info
 
@@ -177,6 +179,20 @@ class ModelCache:
                 redis_client.set(REDIS_CACHE_KEY, json.dumps(data, ensure_ascii=False))
         except Exception as e:
             logger.error(f"Failed to save model cache to Redis: {e}")
+
+    async def async_rebuild_from_db(self) -> int:
+        """从数据库异步重建缓存，返回加载的模型数量。失败返回 0。"""
+        try:
+            from yuxi.storage.postgres.manager import pg_manager
+            from yuxi.models.providers.service import get_all_model_providers
+
+            async with pg_manager.get_async_session_context() as session:
+                providers = await get_all_model_providers(session)
+                self.rebuild(providers)
+                return len(self._load_cache())
+        except Exception as e:
+            logger.warning(f"Failed to auto-rebuild model cache from DB: {e}")
+            return 0
 
     @staticmethod
     def _get_base_url_for_type(provider: Any, model_type: str) -> str:

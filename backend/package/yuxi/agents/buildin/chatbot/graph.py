@@ -24,7 +24,7 @@ from yuxi.agents.middlewares.skills import SkillsMiddleware
 from yuxi.agents.middlewares.subagent_task import create_subagent_task_middleware
 from yuxi.agents.tool_approval import create_tool_approval_middleware, normalize_tool_approval_mode
 from yuxi.agents.toolkits.service import resolve_configured_runtime_tools
-from yuxi.models.chat import load_chat_model, resolve_chat_model_spec
+from yuxi.models.chat import async_load_chat_model, load_chat_model, resolve_chat_model_spec
 
 from .context import ChatBotContext
 from .prompt import TODO_MID_PROMPT, build_prompt_with_context
@@ -49,7 +49,7 @@ async def _build_middlewares(context, backend):
         middlewares.append(subagent_middleware)
     middlewares.extend(
         [
-            create_summary_middleware_from_context(context, backend=backend),
+            await create_summary_middleware_from_context(context, backend=backend),
             TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
             PatchToolCallsMiddleware(),
             ModelRetryMiddleware(max_retries=getattr(context, "model_retry_times", 2)),
@@ -87,7 +87,7 @@ class ChatbotAgent(BaseAgent):
         backend = create_agent_composite_backend(context)
         model_spec = resolve_chat_model_spec(context.model)
         graph = create_agent(
-            model=load_chat_model(fully_specified_name=model_spec, session_id=context.thread_id),
+            model=await async_load_chat_model(fully_specified_name=model_spec, session_id=context.thread_id),
             tools=await resolve_configured_runtime_tools(context),
             system_prompt=build_prompt_with_context(context),
             middleware=await _build_middlewares(context, backend),

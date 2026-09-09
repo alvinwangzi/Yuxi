@@ -122,7 +122,6 @@ export async function apiRequest(url, options = {}, requiresAuth = true, respons
     // 处理API返回的错误
     if (!response.ok) {
       // 尝试解析错误信息
-      const errorMessage = publicErrorMessage(url, response.status, response.headers, requiresAuth)
       let errorData = null
 
       console.error('API请求失败:', safeRequestMetadata(url, requestOptions, response))
@@ -138,6 +137,10 @@ export async function apiRequest(url, options = {}, requiresAuth = true, respons
         // 如果无法解析JSON，使用默认错误信息
         console.error('API错误响应无法解析:', safeRequestMetadata(url, requestOptions, response))
       }
+
+      const serverDetail = typeof errorData?.detail === 'string' ? errorData.detail : ''
+      const errorMessage =
+        serverDetail || publicErrorMessage(url, response.status, response.headers, requiresAuth)
 
       // 特殊处理401和403错误
       const error = new Error(errorMessage)
