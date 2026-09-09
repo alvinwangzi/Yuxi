@@ -2,8 +2,8 @@ import re
 
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import RedirectResponse, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,13 @@ from yuxi.services.login_rate_limit_service import (
     clear_login_failures,
     extract_client_ip,
     record_login_failure,
+)
+from yuxi.services.captcha_service import (
+    CAPTCHA_THRESHOLD,
+    check_captcha_required,
+    delete_captcha,
+    generate_captcha,
+    get_captcha_answer,
 )
 from yuxi.services.identity_admin_service import (
     IdentityConflictError,
@@ -221,6 +228,8 @@ def _raise_cli_auth_error(exc: CLIAuthError) -> None:
 async def login_for_access_token(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
+    captcha_id: str | None = Form(default=None),
+    captcha_answer: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     # 查找用户 - 支持user_id和phone_number登录
@@ -247,6 +256,35 @@ async def login_for_access_token(
             detail="登录标识或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # 检查是否需要验证码（失败次数 >= 阈值）
+    captcha_required = user.login_failed_count >= CAPTCHA_THRESHOLD
+    if captcha_required:
+        if not captcha_id or captcha_answer is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请输入验证码",
+            )
+        stored_answer = await get_captcha_answer(captcha_id)
+        if stored_answer is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="验证码已过期，请刷新",
+            )
+        try:
+            if int(captcha_answer.strip()) != int(stored_answer):
+                await delete_captcha(captcha_id)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="验证码错误",
+                )
+        except (ValueError, TypeError):
+            await delete_captcha(captcha_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="验证码格式错误",
+            )
+        await delete_captcha(captcha_id)
 
     # 检查用户是否已被删除
     if user.is_deleted:
@@ -327,6 +365,28 @@ async def login_for_access_token(
         "department_id": user.department_id,
         "department_name": department_name,
     }
+
+
+# =============================================================================
+# === 验证码分组 ===
+# =============================================================================
+
+
+@auth.get("/captcha/require")
+async def check_captcha_needed(
+    login_identifier: str = Query(..., description="登录标识（UID 或手机号）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """检查指定登录标识是否需要验证码。"""
+    required = await check_captcha_required(db, login_identifier)
+    return {"required": required}
+
+
+@auth.post("/captcha/generate")
+async def generate_captcha_endpoint():
+    """生成验证码图片，返回 PNG 字节流。"""
+    captcha_id, image_bytes = await generate_captcha()
+    return Response(content=image_bytes, media_type="image/png", headers={"X-Captcha-ID": captcha_id})
 
 
 # =============================================================================

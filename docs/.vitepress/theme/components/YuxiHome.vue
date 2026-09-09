@@ -488,14 +488,10 @@ onBeforeUnmount(() => {
           </div>
           <h1>让知识真正参与<br>每一次行动</h1>
           <p>把团队知识、工具与多智能体执行接进一个可私有部署的工作台。</p>
-          <div class="yx-actions">
-            <a class="yx-button yx-button--primary" :href="withBase('/intro/quick-start')">开始部署</a>
-            <a class="yx-button yx-button--secondary" :href="GITHUB" target="_blank" rel="noreferrer">查看 GitHub</a>
-          </div>
         </div>
 
         <div class="yx-hero__visual">
-          <figure class="pixel-mascot" role="img" aria-label="Yuxi 在循环流动的文档、知识图谱、记忆与交付信号中持续工作">
+          <figure class="pixel-mascot" role="img" aria-label="在循环流动的文档、知识图谱、记忆与交付信号中持续工作">
             <canvas ref="canvasRef" class="pixel-mascot__canvas" aria-hidden="true"></canvas>
             <img
               class="pixel-mascot__character"

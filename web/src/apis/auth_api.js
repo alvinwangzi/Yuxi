@@ -58,6 +58,12 @@ async function login(credentials) {
   const formData = new FormData()
   formData.append('username', credentials.loginId)
   formData.append('password', credentials.password)
+  if (credentials.captchaId) {
+    formData.append('captcha_id', credentials.captchaId)
+  }
+  if (credentials.captchaAnswer !== undefined && credentials.captchaAnswer !== null) {
+    formData.append('captcha_answer', String(credentials.captchaAnswer))
+  }
   return apiPost('/api/auth/token', formData, {}, false)
 }
 
@@ -67,6 +73,30 @@ async function initialize(admin) {
 
 async function checkFirstRun() {
   return apiGet('/api/auth/check-first-run', {}, false)
+}
+
+/**
+ * 检查指定登录标识是否需要验证码
+ * @param {string} loginIdentifier - 登录标识（UID 或手机号）
+ * @returns {Promise<{required: boolean}>}
+ */
+async function checkCaptchaRequired(loginIdentifier) {
+  return apiGet(`/api/auth/captcha/require?login_identifier=${encodeURIComponent(loginIdentifier)}`, {}, false)
+}
+
+/**
+ * 生成验证码图片
+ * @returns {Promise<{captchaId: string, imageUrl: string}>}
+ */
+async function generateCaptcha() {
+  const response = await fetch('/api/auth/captcha/generate', { method: 'POST' })
+  if (!response.ok) {
+    throw new Error('获取验证码失败')
+  }
+  const captchaId = response.headers.get('X-Captcha-ID')
+  const blob = await response.blob()
+  const imageUrl = URL.createObjectURL(blob)
+  return { captchaId, imageUrl }
 }
 
 async function getUsers({ skip = 0, limit = 100 } = {}) {
@@ -134,6 +164,8 @@ export const authApi = {
   login,
   initialize,
   checkFirstRun,
+  checkCaptchaRequired,
+  generateCaptcha,
   getUsers,
   getUsersPage,
   createUser,

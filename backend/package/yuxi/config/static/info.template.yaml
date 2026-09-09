@@ -11,16 +11,15 @@ organization:
 # 项目信息
 branding:
   name: "Mably"
-  title: "让团队知识可连接，让智能体可行动"     # 系统标题
+  title: "让知识在连接中流动，让智能在行动中进化"     # 系统标题
   subtitle: "知识库 × 知识图谱 × 智能体 Harness"   # 副标题（subtitles 为空时使用）
   subtitles:
     - "知识与智能体真正协同，每个回答都可溯源"
-    - "从回答问题到交付任务，工具与沙盒一站完成"
-    - "完善的权限与模型治理，面向团队的专业解决方案"
+    - "链接团队智慧，共创智能未来"
     - "数据本地化，安全可控"
 
 # 页脚信息
 footer:
   copyright: "© 迈步未来科技 2026 v{{YUXI_VERSION}}"
-  user_agreement_url: "/protocols/user-agreement.template.html"
-  privacy_policy_url: "/protocols/privacy-policy.template.html"
+  user_agreement_url: "/protocols/user-agreement.html"
+  privacy_policy_url: "/protocols/privacy-policy.html"

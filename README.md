@@ -71,6 +71,62 @@ curl --fail http://localhost:5050/api/system/ready
 
 从 v0.7.1 或 v0.7.2 升级到当前版本时，不能直接执行 `docker compose up`。请先阅读[生产部署与升级](docs/advanced/deployment.md)，在停机窗口完成备份和迁移。
 
+### 3. 本地开发环境（前端本地运行 + 其余服务 Docker 部署）
+
+日常开发前端时，可以把前端放在本机直接运行以获得热更新体验，其余服务（API、Worker、PostgreSQL、Redis、Milvus、Neo4j、MinIO、Sandbox 等）仍然通过 Docker Compose 启动。
+
+#### 前置条件
+
+- 已完成初始化（`.env` 已配置好所有必需的密钥和 API Key）
+- 已安装 [Node.js](https://nodejs.org/) 和 [pnpm](https://pnpm.io/)
+
+#### 步骤一：启动 Docker 服务（排除 web 容器）
+
+```bash
+# 启动除 web 之外的所有服务
+docker compose up -d --build api worker storage-migrator sandbox-provisioner graph etcd minio milvus postgres redis
+```
+
+等待后端 API 就绪：
+
+```bash
+# 查看服务状态，所有服务显示 healthy 即可
+docker compose ps
+
+# 或通过健康检查接口确认
+curl --fail http://localhost:5050/api/system/ready
+```
+
+#### 步骤二：安装前端依赖并启动
+
+```bash
+cd web
+pnpm install
+pnpm dev
+```
+
+前端开发服务器启动后，访问 [http://localhost:5173](http://localhost:5173) 即可。
+
+#### 工作原理
+
+`web/.env.local` 已预配置 Vite 代理目标：
+
+```
+VITE_API_URL=http://localhost:5050
+VITE_MINIO_URL=http://localhost:9000
+```
+
+`vite.config.js` 会把 `/api` 请求代理到 Docker 中运行的 API 服务，`/minio/public/` 请求代理到 Docker 中的 MinIO，前端代码修改通过 Vite HMR 实时生效，无需重建容器。
+
+#### 停止环境
+
+```bash
+# 停止所有 Docker 服务
+docker compose down
+
+# 如果前端开发服务器仍在运行，按 Ctrl+C 停止即可
+```
+
 ## 文档导航
 
 - [项目介绍](https://xerrors.github.io/Yuxi/intro/project-overview)：了解能力、概念和系统边界。

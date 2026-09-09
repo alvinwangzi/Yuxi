@@ -122,12 +122,12 @@ const logout = () => {
   userStore.logout()
   message.success('已退出登录')
   // 跳转到首页
-  router.push('/login')
+  router.push('/')
 }
 
 // 前往登录页
 const goToLogin = () => {
-  router.push('/login')
+  router.push('/')
 }
 
 const openDocs = () => {

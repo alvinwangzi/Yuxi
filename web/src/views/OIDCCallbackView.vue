@@ -47,7 +47,7 @@ const errorMessage = ref('处理登录请求时发生错误')
 
 // 返回登录页
 const goToLogin = () => {
-  router.push('/login')
+  router.push('/')
 }
 
 // 处理 OIDC 回调 - 从 URL 参数中获取一次性 code

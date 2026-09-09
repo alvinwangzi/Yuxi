@@ -3,7 +3,6 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import BlankLayout from '@/layouts/BlankLayout.vue'
 import { useUserStore } from '@/stores/user'
 import { useAgentStore } from '@/stores/agent'
-import { sanitizeRedirect } from '@/utils/oidcAutoStart'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -20,12 +19,6 @@ const router = createRouter({
           meta: { keepAlive: true, requiresAuth: false }
         }
       ]
-    },
-    {
-      path: '/login',
-      name: 'login',
-      component: () => import('../views/LoginView.vue'),
-      meta: { requiresAuth: false }
     },
     {
       path: '/auth/oidc/callback', // oidc登录回调页面
@@ -191,7 +184,7 @@ router.beforeEach(async (to) => {
   if (requiresAuth && !isLoggedIn) {
     // 保存尝试访问的路径，登录后跳转
     sessionStorage.setItem('redirect', to.fullPath)
-    return '/login'
+    return '/'
   }
 
   // 如果路由需要管理员权限但用户不是管理员
@@ -222,11 +215,6 @@ router.beforeEach(async (to) => {
       console.error('获取智能体信息失败:', error)
       return '/agent'
     }
-  }
-
-  // 如果用户已登录但访问登录页，按 redirect 参数跳转
-  if (to.path === '/login' && isLoggedIn) {
-    return sanitizeRedirect(to.query.redirect)
   }
 
   // 其他情况正常导航
