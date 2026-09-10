@@ -44,6 +44,17 @@ test('工程、设计、营销类角色命中新增配饰，质检词优先于�
   assert.equal(resolveAgentFaceConfig('新媒体营销助手', '').accessory, 'megaphone')
 })
 
+test('管理身份命中公文包，业务词优先于管理词', () => {
+  assert.equal(resolveAgentFaceConfig('CEO 战略助手', '').accessory, 'briefcase')
+  assert.equal(resolveAgentFaceConfig('技术总监', '').accessory, 'briefcase')
+  assert.equal(resolveAgentFaceConfig('部门主管', '负责日常管理').accessory, 'briefcase')
+  // briefcase 置于最后：含业务词的管理者先归业务域。
+  assert.equal(resolveAgentFaceConfig('销售总监', '').accessory, 'chart')
+  assert.equal(resolveAgentFaceConfig('首席财务官', '').accessory, 'chart')
+  // glasses 的「项目管理」在 briefcase 前命中。
+  assert.equal(resolveAgentFaceConfig('项目管理办公室', '').accessory, 'glasses')
+})
+
 test('无词典命中时配置纯哈希稳定且取值合法', () => {
   const first = resolveAgentFaceConfig('通用智能助手', '处理日常事务')
   const second = resolveAgentFaceConfig('通用智能助手', '处理日常事务')
@@ -85,4 +96,8 @@ test('新增配饰渲染对应 SVG 特征', () => {
   // 扩音喇叭：锥体与声波弧。
   assert.ok(svgOf('新媒体营销助手').includes('<path d="M 47.5 45 L 58 40.5 L 58 51.5 L 45.5 52 Z"'))
   assert.ok(svgOf('新媒体营销助手').includes('M 60.5 43.5 Q 61 46 60.5 48.5'))
+  // 公文包：包体、提手与扣带线。
+  assert.ok(svgOf('CEO 战略助手').includes('<rect x="45" y="45" width="14" height="10" rx="2"'))
+  assert.ok(svgOf('CEO 战略助手').includes('M 49.5 45 L 49.5 42.5 Q 49.5 41.5 50.5 41.5 L 53.5 41.5 Q 54.5 41.5 54.5 42.5 L 54.5 45'))
+  assert.ok(svgOf('CEO 战略助手').includes('<line x1="45" y1="49.5" x2="59" y2="49.5"'))
 })

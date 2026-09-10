@@ -1,5 +1,5 @@
 // 智能体默认头像：按名称与描述确定性生成 Notion 风格人像 SVG data URI。
-// 词典按企业应用场景组织；词表、九类配饰对应关系与裁决顺序由本文件拥有。
+// 词典按企业应用场景组织；词表、十类配饰对应关系与裁决顺序由本文件拥有。
 
 const SVG_INK = '#1f1f1f'
 const SVG_BORDER = '#e6e3dc'
@@ -12,10 +12,10 @@ const SKIN_TONES = ['#f2c9a0', '#e8b98c', '#f7d3b0', '#d9a273']
 const HAIR_COLORS = ['#2f2a26', '#3b2f2a', '#4a3728', '#1f1b18', '#5b4636']
 const HAIR_STYLES = ['short', 'bob', 'long', 'bun', 'curly', 'side']
 const BACKGROUNDS = ['#fdfcf9', '#f8f6f2', '#f4f7f5', '#f7f4f8', '#f6f4ee']
-// 含两个 null：无词典命中的智能体约 2/11 概率无配饰，对应「通用助手」型角色。
+// 含两个 null：无词典命中的智能体约 2/12 概率无配饰，对应「通用助手」型角色。
 const ACCESSORY_FALLBACKS = [
   'glasses', 'clipboard', 'check', 'globe', 'pen', 'chart',
-  'terminal', 'palette', 'megaphone', null, null
+  'terminal', 'palette', 'megaphone', 'briefcase', null, null
 ]
 
 // 企业场景词典，参考 The Agency 智能体角色清单（engineering/design/marketing 等部门）初始化。
@@ -102,6 +102,16 @@ export const AGENT_FACE_SCENARIOS = [
       '研究', '深入', '学术', '论文', '专家', '顾问', '咨询', '评估', '评审',
       '洞察', '策略', '规划', '方案', '决策', '项目管理', '产品', '需求', '趋势',
       '心理'
+    ]
+  },
+  {
+    // briefcase 置于最后：含业务领域词的管理者（销售总监、首席财务官）先归业务域，
+    // 纯管理身份词（CEO、总监、经理）才落到领导管理。
+    accessory: 'briefcase',
+    label: '领导与管理',
+    keywords: [
+      'CEO', 'CTO', 'CFO', 'COO', 'CMO', '首席', '总裁', '总经理', '总监',
+      '主管', '经理', '管理', '领导', '负责人', '合伙人', '董事'
     ]
   }
 ]
@@ -225,6 +235,13 @@ const buildAccessory = (accessory) => {
       `<path d="M 47.5 45 L 58 40.5 L 58 51.5 L 45.5 52 Z" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2" stroke-linejoin="round"/>`,
       `<path d="M 47 52.5 L 46 56 L 49.5 55.5" fill="none" stroke="${SVG_INK}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`,
       `<path d="M 60.5 43.5 Q 61 46 60.5 48.5" fill="none" stroke="${SVG_INK}" stroke-width="1.6" stroke-linecap="round"/>`
+    ].join('')
+  }
+  if (accessory === 'briefcase') {
+    return [
+      `<rect x="45" y="45" width="14" height="10" rx="2" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2"/>`,
+      `<path d="M 49.5 45 L 49.5 42.5 Q 49.5 41.5 50.5 41.5 L 53.5 41.5 Q 54.5 41.5 54.5 42.5 L 54.5 45" fill="none" stroke="${SVG_INK}" stroke-width="1.8"/>`,
+      `<line x1="45" y1="49.5" x2="59" y2="49.5" stroke="${SVG_INK}" stroke-width="1.6"/>`
     ].join('')
   }
   return ''
