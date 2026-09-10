@@ -12,7 +12,7 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import FallbackAvatar from '@/components/common/FallbackAvatar.vue'
 import ExtensionCardGrid from '@/components/extensions/ExtensionCardGrid.vue'
 import { normalizeAgent, normalizeAgentBackendOption } from '@/utils/agentConfigUtils'
-import { generatePixelAvatar } from '@/utils/pixelAvatar'
+import { generateAgentFaceAvatar } from '@/utils/agentFaceAvatar'
 import { getShareConfigLabel } from '@/utils/shareConfig'
 
 const agentStore = useAgentStore()
@@ -65,7 +65,7 @@ const agentStats = computed(() => ({
   ).length
 }))
 const canManageAgent = (agent) => !!agent?.can_manage
-const getAgentDefaultIconSrc = (agent) => (agent.id ? generatePixelAvatar(agent.id) : '')
+const getAgentDefaultIconSrc = (agent) => generateAgentFaceAvatar(agent.name, agent.description)
 
 /** 返回智能体共享范围的简短展示文案。 */
 const getAgentShareLabel = (agent) => getShareConfigLabel(agent?.share_config)

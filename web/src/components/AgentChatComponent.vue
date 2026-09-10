@@ -850,7 +850,7 @@ import {
   Trash2
 } from '@lucide/vue'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
-import { generatePixelAvatar } from '@/utils/pixelAvatar'
+import { generateAgentFaceAvatar } from '@/utils/agentFaceAvatar'
 import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons-vue'
 import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContextUsageRing from '@/components/ContextUsageRing.vue'
@@ -1181,7 +1181,7 @@ const getSubagentIconSrc = (run) => {
 }
 
 const getSubagentDefaultIconSrc = (run) =>
-  run?.subagent_slug ? generatePixelAvatar(run.subagent_slug) : ''
+  run?.subagent_slug ? generateAgentFaceAvatar(getSubagentRunName(run), run.description) : ''
 
 const normalizePanelPath = (path) => String(path || '').replace(/\/+$/, '')
 
