@@ -34,6 +34,16 @@ test('标题优先于描述，多词命中按词典固定顺序取首个', () =>
   assert.equal(resolveAgentFaceConfig('客服问题解答机器人', '').accessory, 'globe')
 })
 
+test('工程、设计、营销类角色命中新增配饰，质检词优先于工程师', () => {
+  assert.equal(resolveAgentFaceConfig('前端开发工程师', '负责 React 界面开发').accessory, 'terminal')
+  assert.equal(resolveAgentFaceConfig('算法工程师', '').accessory, 'terminal')
+  // check 置于 terminal 前：含质检词的「工程师」仍归审核合规。
+  assert.equal(resolveAgentFaceConfig('测试工程师', '').accessory, 'check')
+  assert.equal(resolveAgentFaceConfig('UI 设计师', '').accessory, 'palette')
+  assert.equal(resolveAgentFaceConfig('产品经理', '').accessory, 'glasses')
+  assert.equal(resolveAgentFaceConfig('新媒体营销助手', '').accessory, 'megaphone')
+})
+
 test('无词典命中时配置纯哈希稳定且取值合法', () => {
   const first = resolveAgentFaceConfig('通用智能助手', '处理日常事务')
   const second = resolveAgentFaceConfig('通用智能助手', '处理日常事务')
@@ -60,4 +70,19 @@ test('输出为可解码的 SVG data URI 且包含配饰特征', () => {
   // 图表配饰由三个 ink 色柱状矩形构成，第三个柱体位于 x=55。
   assert.ok(svg.includes('<rect x="55" y="43"'))
   assert.ok(!svg.toLowerCase().includes('dicebear'))
+})
+
+test('新增配饰渲染对应 SVG 特征', () => {
+  const svgOf = (name) => decodeURIComponent(
+    generateAgentFaceAvatar(name, '').slice(DATA_URI_PREFIX.length)
+  )
+  // 终端窗口：提示符括号与光标线。
+  assert.ok(svgOf('前端开发工程师').includes('<path d="M 47.5 44.5 L 50 47 L 47.5 49.5"'))
+  assert.ok(svgOf('前端开发工程师').includes('<line x1="51.5" y1="49.5"'))
+  // 调色盘：圆盘与拇指洞圈。
+  assert.ok(svgOf('UI 设计师').includes('<circle cx="52" cy="47.5" r="8"'))
+  assert.ok(svgOf('UI 设计师').includes('<circle cx="55.5" cy="50.5" r="2.4"'))
+  // 扩音喇叭：锥体与声波弧。
+  assert.ok(svgOf('新媒体营销助手').includes('<path d="M 47.5 45 L 58 40.5 L 58 51.5 L 45.5 52 Z"'))
+  assert.ok(svgOf('新媒体营销助手').includes('M 60.5 43.5 Q 61 46 60.5 48.5'))
 })
