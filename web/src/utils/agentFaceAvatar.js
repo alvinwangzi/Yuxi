@@ -1,5 +1,5 @@
 // 智能体默认头像：按名称与描述确定性生成 Notion 风格人像 SVG data URI。
-// 词典按企业应用场景组织；词表、十类配饰对应关系与裁决顺序由本文件拥有。
+// 词典按企业应用场景组织；词表、十三类配饰对应关系与裁决顺序由本文件拥有。
 
 const SVG_INK = '#1f1f1f'
 const SVG_BORDER = '#e6e3dc'
@@ -12,10 +12,11 @@ const SKIN_TONES = ['#f2c9a0', '#e8b98c', '#f7d3b0', '#d9a273']
 const HAIR_COLORS = ['#2f2a26', '#3b2f2a', '#4a3728', '#1f1b18', '#5b4636']
 const HAIR_STYLES = ['short', 'bob', 'long', 'bun', 'curly', 'side']
 const BACKGROUNDS = ['#fdfcf9', '#f8f6f2', '#f4f7f5', '#f7f4f8', '#f6f4ee']
-// 含两个 null：无词典命中的智能体约 2/12 概率无配饰，对应「通用助手」型角色。
+// 含两个 null：无词典命中的智能体约 2/15 概率无配饰，对应「通用助手」型角色。
 const ACCESSORY_FALLBACKS = [
   'glasses', 'clipboard', 'check', 'globe', 'pen', 'chart',
-  'terminal', 'palette', 'megaphone', 'briefcase', null, null
+  'terminal', 'palette', 'megaphone', 'target', 'coins', 'users',
+  'briefcase', null, null
 ]
 
 // 企业场景词典，参考 The Agency 智能体角色清单（engineering/design/marketing 等部门）初始化。
@@ -59,6 +60,15 @@ export const AGENT_FACE_SCENARIOS = [
     ]
   },
   {
+    // target 置于 globe 前：电商客服等销售与客服交叉词优先归销售域。
+    accessory: 'target',
+    label: '销售与增长',
+    keywords: [
+      '销售', '营收', '增长', '电商', '零售', '商机', '业绩', '签单',
+      '客户', '渠道', '经销', '拓客', '获客', '成单'
+    ]
+  },
+  {
     accessory: 'globe',
     label: '外部信息与检索',
     keywords: [
@@ -77,13 +87,21 @@ export const AGENT_FACE_SCENARIOS = [
     ]
   },
   {
+    // chart 只收数据与量化职能；财务、销售岗位各有独立配饰。
     accessory: 'chart',
     label: '数据与量化',
     keywords: [
-      '数据', '分析', '统计', '报表', '指标', '监控', '大盘', '预测', '财务',
-      '成本', '预算', '营收', '销售', '绩效', '库存', '增长', '经营', '运营',
-      '考核', '税务', '发票', '报销', '记账', '核算', '电商', '零售', '投资',
-      '估值', '资产', '现金流', 'KPI'
+      '数据', '分析', '统计', '报表', '指标', '监控', '大盘', '预测', '绩效',
+      '库存', '经营', '运营', '考核', 'KPI'
+    ]
+  },
+  {
+    // coins 置于 chart 后：财务报表、财务分析等量化词仍归柱状图，纯财务词归硬币。
+    accessory: 'coins',
+    label: '财务与会计',
+    keywords: [
+      '财务', '会计', '税务', '发票', '报销', '记账', '核算', '成本',
+      '预算', '现金流', '资产', '估值', '投资', '资金', '账单'
     ]
   },
   {
@@ -91,8 +109,16 @@ export const AGENT_FACE_SCENARIOS = [
     label: '调研与归档',
     keywords: [
       '调研', '访谈', '收集', '采集', '整理', '归档', '盘点', '索引', '知识库',
-      '资料', '录入', '清单', '档案', '记录', '登记', '招聘', '人事', '行政',
-      '入职', '薪酬', '考勤', '简历', '调查', '问卷', '回访'
+      '资料', '录入', '清单', '档案', '记录', '登记', '调查', '问卷', '回访'
+    ]
+  },
+  {
+    // users 置于 clipboard 后：调研归档优先，纯人事词归双人形。
+    accessory: 'users',
+    label: '人事与行政',
+    keywords: [
+      '招聘', '人事', '行政', '入职', '薪酬', '考勤', '简历', '人力',
+      '员工', '团队', '组织', 'HR'
     ]
   },
   {
@@ -235,6 +261,28 @@ const buildAccessory = (accessory) => {
       `<path d="M 47.5 45 L 58 40.5 L 58 51.5 L 45.5 52 Z" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2" stroke-linejoin="round"/>`,
       `<path d="M 47 52.5 L 46 56 L 49.5 55.5" fill="none" stroke="${SVG_INK}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`,
       `<path d="M 60.5 43.5 Q 61 46 60.5 48.5" fill="none" stroke="${SVG_INK}" stroke-width="1.6" stroke-linecap="round"/>`
+    ].join('')
+  }
+  if (accessory === 'target') {
+    return [
+      `<circle cx="52" cy="48" r="8" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2"/>`,
+      `<circle cx="52" cy="48" r="4.5" fill="none" stroke="${SVG_INK}" stroke-width="1.6"/>`,
+      `<circle cx="52" cy="48" r="1.6" fill="${SVG_INK}"/>`
+    ].join('')
+  }
+  if (accessory === 'coins') {
+    return [
+      `<ellipse cx="52" cy="54" rx="7" ry="2.6" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2"/>`,
+      `<ellipse cx="52" cy="50" rx="7" ry="2.6" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2"/>`,
+      `<ellipse cx="52" cy="46" rx="7" ry="2.6" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="2"/>`
+    ].join('')
+  }
+  if (accessory === 'users') {
+    return [
+      `<circle cx="48.5" cy="45.5" r="3" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="1.8"/>`,
+      `<path d="M 43.5 56.5 Q 43.5 50.5 48.5 50.5 Q 53.5 50.5 53.5 56.5" fill="none" stroke="${SVG_INK}" stroke-width="1.8" stroke-linecap="round"/>`,
+      `<circle cx="56.5" cy="44.5" r="2.6" fill="#fdfcf9" stroke="${SVG_INK}" stroke-width="1.8"/>`,
+      `<path d="M 55.5 49.8 Q 60.5 50.2 60.5 55.5" fill="none" stroke="${SVG_INK}" stroke-width="1.8" stroke-linecap="round"/>`
     ].join('')
   }
   if (accessory === 'briefcase') {
