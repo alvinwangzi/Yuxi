@@ -149,7 +149,7 @@
             :aria-expanded="recentExpanded"
             @click="recentExpanded = !recentExpanded"
           >
-            <span>最近</span>
+            <span>最近对话</span>
             <ChevronDown :size="14" class="collapse-icon" :class="{ collapsed: !recentExpanded }" />
           </button>
           <CollapseTransition>

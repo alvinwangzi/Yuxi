@@ -56,8 +56,10 @@ The initialization script creates `.env`, prompts for a SiliconFlow API Key, and
 ### 2. Start the Development Environment
 
 ```bash
-docker compose up --build -d
+docker compose --profile all up --build -d
 ```
+
+`--profile all` also starts the MinerU document parsing service (requires an NVIDIA GPU). If no GPU is available, remove `--profile all` and the system falls back to the built-in OCR engine.
 
 Check service status:
 

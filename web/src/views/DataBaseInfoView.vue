@@ -785,8 +785,14 @@ const folderTree = computed(() => {
   return roots
 })
 
-const onFileUploadSuccess = () => {
+const onFileUploadSuccess = async () => {
   taskerStore.loadTasks()
+  try {
+    await fileTableRef.value?.refresh?.()
+  } catch (error) {
+    console.error('上传后刷新文件列表失败:', error)
+    message.warning('上传成功，但列表刷新失败，请手动刷新')
+  }
 }
 
 const resetFileSelectionState = () => {

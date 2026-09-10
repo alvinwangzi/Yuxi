@@ -57,8 +57,10 @@ cd Yuxi
 ### 2. 启动开发环境
 
 ```bash
-docker compose up --build -d
+docker compose --profile all up --build -d
 ```
+
+`--profile all` 会同时启动 MinerU 高精度文档解析服务（需要 NVIDIA GPU）。如果没有 GPU 环境，去掉 `--profile all` 即可，系统会自动回退到内置 OCR 引擎。
 
 查看服务状态：
 
@@ -73,7 +75,7 @@ curl --fail http://localhost:5050/api/system/ready
 
 ### 3. 本地开发环境（前端本地运行 + 其余服务 Docker 部署）
 
-日常开发前端时，可以把前端放在本机直接运行以获得热更新体验，其余服务（API、Worker、PostgreSQL、Redis、Milvus、Neo4j、MinIO、Sandbox 等）仍然通过 Docker Compose 启动。
+日常开发前端时，可以把前端放在本机直接运行以获得热更新体验，其余服务（API、Worker、PostgreSQL、Redis、Milvus、Neo4j、MinIO、MinerU、Sandbox 等）仍然通过 Docker Compose 启动。
 
 #### 前置条件
 
@@ -83,8 +85,9 @@ curl --fail http://localhost:5050/api/system/ready
 #### 步骤一：启动 Docker 服务（排除 web 容器）
 
 ```bash
-# 启动除 web 之外的所有服务
-docker compose up -d --build api worker storage-migrator sandbox-provisioner graph etcd minio milvus postgres redis
+# 启动除 web 之外的所有服务（含 MinerU 文档解析，需要 NVIDIA GPU）
+# 无 GPU 环境请去掉 --profile all，系统会自动回退到内置 OCR
+docker compose --profile all up -d --build api worker storage-migrator sandbox-provisioner mineru-api graph etcd minio milvus postgres redis
 ```
 
 等待后端 API 就绪：
