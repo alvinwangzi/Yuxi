@@ -275,9 +275,13 @@ defineExpose({
 </template>
 
 <style lang="less" scoped>
+@import '@/assets/css/extensions.less';
+
 .agent-manage-panel {
   height: 100%;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .agent-empty-state {
