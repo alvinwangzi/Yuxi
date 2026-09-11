@@ -718,7 +718,10 @@ const skillGroups = computed(() => [
   {
     key: 'recommended',
     title: '推荐',
-    skills: isBatchDeleteMode.value ? [] : recommendedSuiteCards.value.filter(matchesSearch)
+    skills:
+      isBatchDeleteMode.value || selectedCategory.value !== 'all'
+        ? []
+        : recommendedSuiteCards.value.filter(matchesSearch)
   },
   {
     key: 'personal',
