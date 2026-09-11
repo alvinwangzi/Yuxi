@@ -14,11 +14,13 @@ import ExtensionCardGrid from '@/components/extensions/ExtensionCardGrid.vue'
 import { normalizeAgent, normalizeAgentBackendOption } from '@/utils/agentConfigUtils'
 import { generateAgentFaceAvatar } from '@/utils/agentFaceAvatar'
 import { getShareConfigLabel } from '@/utils/shareConfig'
+import { CATEGORIES, CATEGORY_LABELS, inferAgentCategory } from '@/utils/itemCategory'
 
 const agentStore = useAgentStore()
 const router = useRouter()
 const agentLoading = ref(false)
 const searchQuery = ref('')
+const selectedCategory = ref('all')
 
 const agentBackendOptions = ref([])
 const managedAgents = ref([])
@@ -26,7 +28,10 @@ const agentEditModalRef = ref(null)
 
 const filteredAgents = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase()
-  const list = managedAgents.value || []
+  const list = (managedAgents.value || []).map((agent) => ({
+    ...agent,
+    category: inferAgentCategory({ name: agent.name || '', description: agent.description || '' })
+  }))
   const filtered = keyword
     ? list.filter(
         (agent) =>
@@ -41,10 +46,26 @@ const filteredAgents = computed(() => {
             .includes(keyword)
       )
     : list
-  return [...filtered].sort((a, b) => {
+  let categoryFiltered = filtered
+  if (selectedCategory.value !== 'all') {
+    categoryFiltered = filtered.filter((agent) => agent.category === selectedCategory.value)
+  }
+  return [...categoryFiltered].sort((a, b) => {
     if (isBuiltinAgent(a) !== isBuiltinAgent(b)) return isBuiltinAgent(a) ? -1 : 1
     return String(a.name || a.id).localeCompare(String(b.name || b.id), 'zh-CN')
   })
+})
+const categoryCounts = computed(() => {
+  const allAgents = (managedAgents.value || []).map((agent) => ({
+    ...agent,
+    category: inferAgentCategory({ name: agent.name || '', description: agent.description || '' })
+  }))
+  const counts = { all: allAgents.length }
+  for (const key of CATEGORIES) {
+    if (key === 'all') continue
+    counts[key] = allAgents.filter((a) => a.category === key).length
+  }
+  return counts
 })
 
 const groupedAgents = computed(() => {
@@ -157,6 +178,20 @@ defineExpose({
         </a-button>
       </template>
     </PageShoulder>
+
+    <div class="category-tab-bar">
+      <button
+        v-for="key in CATEGORIES"
+        :key="key"
+        type="button"
+        class="tab-item"
+        :class="{ active: selectedCategory === key }"
+        @click="selectedCategory = key"
+      >
+        {{ CATEGORY_LABELS[key] }}
+        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
+      </button>
+    </div>
 
     <div v-if="groupedAgents.length === 0" class="agent-empty-state">
       <a-empty :image="false" :description="searchQuery ? '没有匹配的智能体' : '暂无智能体'" />
@@ -322,6 +357,54 @@ defineExpose({
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+.category-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px var(--page-padding) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-item {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--gray-600);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+      color: var(--gray-900);
+      background-color: color-mix(in srgb, var(--gray-800) 4%, var(--gray-0));
+    }
+
+    &.active {
+      color: var(--gray-2000);
+      background-color: color-mix(in srgb, var(--gray-800) 6%, var(--gray-0));
+    }
+  }
+
+  .tab-count {
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-400);
   }
 }
 </style>
