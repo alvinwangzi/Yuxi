@@ -37,6 +37,8 @@ test('inferSkillCategory 按 slug 匹配办公协同', () => {
 test('inferSkillCategory 按 name 匹配开发工具', () => {
   assert.equal(inferSkillCategory({ slug: 'x', name: 'Code Reviewer', tool_dependencies: [], mcp_dependencies: [] }), 'dev')
   assert.equal(inferSkillCategory({ slug: 'x', name: 'Git Helper', tool_dependencies: [], mcp_dependencies: [] }), 'dev')
+  assert.equal(inferSkillCategory({ slug: 'frontend-design', name: 'Frontend Design', tool_dependencies: [], mcp_dependencies: [] }), 'dev')
+  assert.equal(inferSkillCategory({ slug: 'html-preview', name: 'Html Preview', tool_dependencies: [], mcp_dependencies: [] }), 'dev')
 })
 
 test('inferSkillCategory 按 tool_dependencies 匹配数据分析', () => {
@@ -45,6 +47,15 @@ test('inferSkillCategory 按 tool_dependencies 匹配数据分析', () => {
 
 test('inferSkillCategory 按 mcp_dependencies 匹配信息资讯', () => {
   assert.equal(inferSkillCategory({ slug: 'x', name: 'y', tool_dependencies: [], mcp_dependencies: ['web-search'] }), 'info')
+})
+
+test('inferSkillCategory 匹配内容创作', () => {
+  assert.equal(inferSkillCategory({ slug: 'podcast-generation', name: 'Podcast Generation', tool_dependencies: [], mcp_dependencies: [] }), 'content')
+  assert.equal(inferSkillCategory({ slug: 'music-generation', name: 'Music Generation', tool_dependencies: [], mcp_dependencies: [] }), 'content')
+})
+
+test('inferSkillCategory 匹配商业运营', () => {
+  assert.equal(inferSkillCategory({ slug: 'consulting-analysis', name: 'Consulting Analysis', tool_dependencies: [], mcp_dependencies: [] }), 'business')
 })
 
 test('inferSkillCategory 未匹配归入 other', () => {
@@ -68,6 +79,7 @@ test('inferToolCategory 映射已有 category 字段', () => {
 test('inferAgentCategory 按 name + description 匹配', () => {
   assert.equal(inferAgentCategory({ name: '营销助手', description: '负责电商营销和客户管理' }), 'business')
   assert.equal(inferAgentCategory({ name: '数据分析师', description: '' }), 'data')
+  assert.equal(inferAgentCategory({ name: '前端开发助手', description: '辅助前端界面开发' }), 'dev')
   assert.equal(inferAgentCategory({ name: 'Random Agent', description: 'Does random things' }), 'other')
 })
 

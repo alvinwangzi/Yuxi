@@ -40,7 +40,9 @@ const CATEGORY_KEYWORDS = [
     key: 'dev',
     words: [
       'code', 'git', 'deploy', 'debug', 'terminal', 'shell', 'sql', 'mysql',
-      'postgres', 'api', 'docker', '代码', '部署', '调试'
+      'postgres', 'api', 'docker', 'frontend', 'backend', 'html', 'css',
+      'javascript', 'typescript', 'react', 'vue', 'angular', 'database',
+      '代码', '部署', '调试', '开发', '前端', '后端'
     ]
   },
   {
@@ -54,21 +56,26 @@ const CATEGORY_KEYWORDS = [
     key: 'content',
     words: [
       'write', 'translate', 'image', 'video', 'audio', 'blog', 'article',
-      'markdown', '写作', '翻译', '设计', '文稿'
+      'markdown', 'podcast', 'music', 'design', 'draw', 'paint', 'photo',
+      'graphic', 'animation', 'render', '写作', '翻译', '设计', '文稿',
+      '播客', '音乐', '绘图'
     ]
   },
   {
     key: 'info',
     words: [
-      'search', 'news', 'web', 'rss', 'crawl', 'monitor', 'alert',
-      '搜索', '新闻', '资讯', '舆情', '监控'
+      'search', 'news', 'web', 'rss', 'crawl', 'monitor', 'alert', 'browse',
+      'summary', '搜索', '新闻', '资讯', '舆情', '监控'
     ]
   },
   {
     key: 'business',
     words: [
       'crm', 'marketing', 'sales', 'ecommerce', 'shop', 'finance', 'invoice',
-      'project', '营销', '销售', '电商', '财务', '项目', '运营', '客户'
+      'project', 'consult', 'analysis', 'management', 'enterprise', 'report',
+      'plan', 'strategy', 'hr', 'erp', 'contract', 'proposal',
+      '营销', '销售', '电商', '财务', '项目', '运营', '客户', '咨询',
+      '管理', '企业', '报告', '商业'
     ]
   },
   {
