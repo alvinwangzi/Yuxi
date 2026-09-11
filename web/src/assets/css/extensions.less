@@ -836,3 +836,52 @@
     color: var(--color-success-700);
   }
 }
+
+/* Category Tab Bar — shared across extension pages */
+.category-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px var(--page-padding) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-item {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--gray-600);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+      color: var(--gray-900);
+      background-color: color-mix(in srgb, var(--gray-800) 4%, var(--gray-0));
+    }
+
+    &.active {
+      color: var(--gray-2000);
+      background-color: color-mix(in srgb, var(--gray-800) 6%, var(--gray-0));
+    }
+  }
+
+  .tab-count {
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-400);
+  }
+}
