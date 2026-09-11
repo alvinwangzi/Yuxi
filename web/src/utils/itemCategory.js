@@ -65,7 +65,8 @@ const CATEGORY_KEYWORDS = [
     key: 'info',
     words: [
       'search', 'news', 'web', 'rss', 'crawl', 'monitor', 'alert', 'browse',
-      'summary', '搜索', '新闻', '资讯', '舆情', '监控'
+      'summary', 'research', 'verify', 'fact',
+      '搜索', '新闻', '资讯', '舆情', '监控', '研究', '核验', '调研'
     ]
   },
   {
@@ -81,8 +82,8 @@ const CATEGORY_KEYWORDS = [
   {
     key: 'productivity',
     words: [
-      'automate', 'workflow', 'reminder', 'schedule', 'task',
-      '自动化', '工作流', '提醒', '任务'
+      'automate', 'workflow', 'reminder', 'schedule', 'task', 'chat', 'assistant',
+      '自动化', '工作流', '提醒', '任务', '对话', '助手'
     ]
   }
 ]

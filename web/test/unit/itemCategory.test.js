@@ -80,6 +80,11 @@ test('inferAgentCategory 按 name + description 匹配', () => {
   assert.equal(inferAgentCategory({ name: '营销助手', description: '负责电商营销和客户管理' }), 'business')
   assert.equal(inferAgentCategory({ name: '数据分析师', description: '' }), 'data')
   assert.equal(inferAgentCategory({ name: '前端开发助手', description: '辅助前端界面开发' }), 'dev')
+  assert.equal(inferAgentCategory({ name: '智能助手', description: '基础的对话机器人' }), 'productivity')
+  assert.equal(inferAgentCategory({ name: '深度研究', description: '深度研究任务' }), 'info')
+  assert.equal(inferAgentCategory({ name: '调研探索员', description: '多轮检索网页' }), 'info')
+  assert.equal(inferAgentCategory({ name: '事实核查员', description: '对抗式核验' }), 'info')
+  assert.equal(inferAgentCategory({ name: '通用任务', description: '完成分析、整理、写作或文件处理' }), 'data')
   assert.equal(inferAgentCategory({ name: 'Random Agent', description: 'Does random things' }), 'other')
 })
 
