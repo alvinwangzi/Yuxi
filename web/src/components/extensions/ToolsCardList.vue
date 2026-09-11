@@ -1,19 +1,6 @@
 <template>
   <div class="tools-cards-page extension-page-root">
     <PageShoulder search-placeholder="搜索工具..." v-model:search="searchQuery">
-      <template #filters>
-        <a-select
-          v-model:value="selectedCategory"
-          style="width: 120px"
-          placeholder="全部分类"
-          allow-clear
-        >
-          <a-select-option value="">全部分类</a-select-option>
-          <a-select-option v-for="cat in categories" :key="cat" :value="cat">
-            {{ categoryLabels[cat] || cat }}
-          </a-select-option>
-        </a-select>
-      </template>
       <template #actions>
         <a-tooltip title="刷新工具" placement="bottom">
           <a-button class="lucide-icon-btn" :disabled="loading" @click="fetchTools">
@@ -22,6 +9,20 @@
         </a-tooltip>
       </template>
     </PageShoulder>
+
+    <div class="category-tab-bar">
+      <button
+        v-for="key in CATEGORIES"
+        :key="key"
+        type="button"
+        class="tab-item"
+        :class="{ active: selectedCategory === key }"
+        @click="selectedCategory = key"
+      >
+        {{ CATEGORY_LABELS[key] }}
+        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
+      </button>
+    </div>
 
     <div v-if="filteredTools.length === 0" class="extension-card-grid-empty-state">
       <a-empty :image="false" :description="searchQuery ? '无匹配工具' : '暂无工具'" />
@@ -71,8 +72,8 @@
               <span>分类</span>
             </div>
             <div class="section-content">
-              <a-tag :color="categoryColors[currentTool.category] || 'default'">
-                {{ categoryLabels[currentTool.category] || currentTool.category }}
+              <a-tag color="blue">
+                {{ CATEGORY_LABELS[inferToolCategory(currentTool)] || '其他' }}
               </a-tag>
             </div>
           </div>
@@ -120,29 +121,24 @@ import ExtensionCardGrid from './ExtensionCardGrid.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import PageShoulder from '@/components/shared/PageShoulder.vue'
 import { formatExtensionCardTitle } from '@/utils/extensionDisplayName'
+import { CATEGORIES, CATEGORY_LABELS, inferToolCategory } from '@/utils/itemCategory'
 
 const WrenchIcon = Wrench
 
 const loading = ref(false)
 const searchQuery = ref('')
-const selectedCategory = ref('')
+const selectedCategory = ref('all')
 const tools = ref([])
 const currentTool = ref(null)
 const detailVisible = ref(false)
-
-const categories = ['buildin', 'knowledge', 'mysql', 'debug']
-const categoryLabels = { buildin: '内置工具', knowledge: '知识库', mysql: 'MySQL', debug: '调试' }
-const categoryColors = { buildin: 'blue', knowledge: 'purple', mysql: 'green', debug: 'orange' }
 
 const getToolSlug = (tool) => tool?.slug || tool?.id || ''
 
 const toolTags = (tool) => {
   const tags = []
-  if (tool.category) {
-    tags.push({
-      name: categoryLabels[tool.category] || tool.category,
-      color: categoryColors[tool.category] || 'blue'
-    })
+  const cat = inferToolCategory(tool)
+  if (cat !== 'other') {
+    tags.push({ name: CATEGORY_LABELS[cat], color: 'blue' })
   }
   ;(tool.tags || []).slice(0, 2).forEach((t) => tags.push(t))
   return tags
@@ -155,8 +151,11 @@ const argColumns = [
 ]
 
 const filteredTools = computed(() => {
-  let result = tools.value
-  if (selectedCategory.value) {
+  let result = tools.value.map((t) => ({
+    ...t,
+    category: inferToolCategory(t)
+  }))
+  if (selectedCategory.value !== 'all') {
     result = result.filter((t) => t.category === selectedCategory.value)
   }
   if (searchQuery.value) {
@@ -170,6 +169,15 @@ const filteredTools = computed(() => {
     )
   }
   return result
+})
+const categoryCounts = computed(() => {
+  const allTools = tools.value.map((t) => ({ ...t, category: inferToolCategory(t) }))
+  const counts = { all: allTools.length }
+  for (const key of CATEGORIES) {
+    if (key === 'all') continue
+    counts[key] = allTools.filter((t) => t.category === key).length
+  }
+  return counts
 })
 
 const selectTool = (tool) => {
@@ -211,5 +219,53 @@ defineExpose({ fetchTools, loading })
 
 .config-guide {
   white-space: pre-line;
+}
+
+.category-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px var(--page-padding) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-item {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--gray-600);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+      color: var(--gray-900);
+      background-color: color-mix(in srgb, var(--gray-800) 4%, var(--gray-0));
+    }
+
+    &.active {
+      color: var(--gray-2000);
+      background-color: color-mix(in srgb, var(--gray-800) 6%, var(--gray-0));
+    }
+  }
+
+  .tab-count {
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-400);
+  }
 }
 </style>
