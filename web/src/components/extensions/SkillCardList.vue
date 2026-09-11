@@ -57,6 +57,20 @@
       </template>
     </PageShoulder>
 
+    <div class="category-tab-bar">
+      <button
+        v-for="key in CATEGORIES"
+        :key="key"
+        type="button"
+        class="tab-item"
+        :class="{ active: selectedCategory === key }"
+        @click="selectedCategory = key"
+      >
+        {{ CATEGORY_LABELS[key] }}
+        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
+      </button>
+    </div>
+
     <div
       v-if="visibleSkillGroups.length === 0"
       class="extension-card-grid-empty-state skill-empty-state"
@@ -523,6 +537,7 @@ import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { formatExtensionCardTitle } from '@/utils/extensionDisplayName'
 import { getShareConfigLabel } from '@/utils/shareConfig'
 import { getSkillIcon } from '@/utils/skill_icon_utils'
+import { CATEGORIES, CATEGORY_LABELS, inferSkillCategory } from '@/utils/itemCategory'
 
 const RECOMMENDED_SUITES = [
   {
@@ -592,6 +607,8 @@ const loading = ref(false)
 const importing = ref(false)
 const listingRemoteSkills = ref(false)
 const searchQuery = ref('')
+const selectedCategory = ref('all')
+const selectedCategory = ref('all')
 
 const isBatchDeleteMode = ref(false)
 const selectedCardSlugs = ref([])
@@ -657,7 +674,13 @@ const installedSkillCards = computed(() =>
   (skills.value || []).map((skill) => ({
     ...skill,
     sourceType: skill.source_type || 'upload',
-    sourceScope: skill.source_scope
+    sourceScope: skill.source_scope,
+    category: inferSkillCategory({
+      slug: skill.slug || '',
+      name: skill.name || '',
+      tool_dependencies: skill.tool_dependencies || [],
+      mcp_dependencies: skill.mcp_dependencies || []
+    })
   }))
 )
 
@@ -677,7 +700,21 @@ const recommendedSuiteCards = computed(() =>
   RECOMMENDED_SUITES.map((suite) => ({ ...suite, isSuite: true }))
 )
 
-const filteredInstalledSkills = computed(() => installedSkillCards.value.filter(matchesSearch))
+const filteredInstalledSkills = computed(() => {
+  let result = installedSkillCards.value
+  if (selectedCategory.value !== 'all') {
+    result = result.filter((skill) => skill.category === selectedCategory.value)
+  }
+  return result.filter(matchesSearch)
+})
+const categoryCounts = computed(() => {
+  const counts = { all: installedSkillCards.value.length }
+  for (const key of CATEGORIES) {
+    if (key === 'all') continue
+    counts[key] = installedSkillCards.value.filter((s) => s.category === key).length
+  }
+  return counts
+})
 const skillGroups = computed(() => [
   {
     key: 'recommended',
@@ -1859,6 +1896,54 @@ defineExpose({
   .clear-icon {
     display: flex;
     align-items: center;
+  }
+}
+
+.category-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px var(--page-padding) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-item {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--gray-600);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+      color: var(--gray-900);
+      background-color: color-mix(in srgb, var(--gray-800) 4%, var(--gray-0));
+    }
+
+    &.active {
+      color: var(--gray-2000);
+      background-color: color-mix(in srgb, var(--gray-800) 6%, var(--gray-0));
+    }
+  }
+
+  .tab-count {
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-400);
   }
 }
 </style>
