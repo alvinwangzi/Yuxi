@@ -1178,6 +1178,7 @@ async def stream_agent_chat(
         )
         _apply_model_override(input_context, meta)
         _apply_input_context_field(input_context, meta, "tool_approval_mode")
+        _apply_input_context_field(input_context, meta, "execution_mode")
         runtime_scope_id = str(meta.get("runtime_scope_id") or thread_id)
         workdir_path = await resolve_conversation_workdir_path(conversation=conversation, uid=uid, db=db)
         input_context["runtime_scope_id"] = runtime_scope_id
@@ -1508,6 +1509,7 @@ async def stream_agent_resume(
     )
     _apply_model_override(input_context, meta)
     _apply_input_context_field(input_context, meta, "tool_approval_mode")
+    _apply_input_context_field(input_context, meta, "execution_mode")
     input_context["runtime_scope_id"] = runtime_scope_id
     input_context["workdir_relative_path"] = workdir_path
     input_context["workdir_path"] = meta["workdir_path"]
@@ -1764,6 +1766,9 @@ async def get_agent_state_view(
             tool_approval_mode = latest_run.input_payload.get("tool_approval_mode")
             if tool_approval_mode:
                 input_context["tool_approval_mode"] = tool_approval_mode
+            execution_mode = latest_run.input_payload.get("execution_mode")
+            if execution_mode:
+                input_context["execution_mode"] = execution_mode
         workdir_path = await resolve_conversation_workdir_path(
             conversation=conversation,
             uid=current_uid,

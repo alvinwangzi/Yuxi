@@ -92,6 +92,19 @@ const router = createRouter({
       ]
     },
     {
+      path: '/scheduled-agents',
+      name: 'scheduled-agents',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'ScheduledAgentsComp',
+          component: () => import('../views/ScheduledAgentsView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/extensions',
       name: 'extensions',
       component: AppLayout,
@@ -124,10 +137,28 @@ const router = createRouter({
                 requiresAuth: true,
                 requiresAdmin: true
               }
-            },
+            }
+          ]
+        }
+      ]
+    },
+    {
+      path: '/skills',
+      name: 'skills',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'SkillsConnectorsComp',
+          component: () => import('../views/SkillsConnectorsView.vue'),
+          meta: {
+            keepAlive: false,
+            requiresAuth: true
+          },
+          children: [
             {
               path: 'mcp/:slug',
-              name: 'ExtensionMcpDetail',
+              name: 'SkillMcpDetail',
               component: () => import('../components/extensions/McpDetailView.vue'),
               meta: {
                 keepAlive: false,
@@ -137,7 +168,7 @@ const router = createRouter({
             },
             {
               path: 'skill/:slug',
-              name: 'ExtensionSkillDetail',
+              name: 'SkillDetail',
               component: () => import('../components/extensions/SkillDetailView.vue'),
               meta: {
                 keepAlive: false,

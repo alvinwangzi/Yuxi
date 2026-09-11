@@ -16,6 +16,11 @@ import { useThemeStore } from '@/stores/theme'
 import { useUserStore } from '@/stores/user'
 import { renderMarkdown } from '@/utils/markdown_preview'
 import { HTML_PREVIEW_MAX_HEIGHT, HTML_PREVIEW_MIN_HEIGHT } from '@/utils/htmlPreviewRenderer'
+import {
+  enhanceChartContainers,
+  cleanupChartInstances,
+  resizeChartInstances
+} from '@/utils/chartRenderer'
 import 'katex/dist/katex.min.css'
 const props = defineProps({
   content: {
@@ -38,6 +43,7 @@ const shikiTheme = computed(() => (themeStore.isDark ? 'github-dark' : 'github-l
 const previewRef = ref(null)
 const copiedTimers = new WeakMap()
 const htmlPreviewFrames = new Map()
+const chartInstancesMap = new Map()
 const kbImageBlobUrls = new Set()
 let pendingMarkdownHtml = null
 
@@ -266,7 +272,7 @@ const enhanceCodeBlocks = () => {
   const root = previewRef.value
   if (!root) return
 
-  root.querySelectorAll('pre:not(.fm-json):not(.html-preview-srcdoc)').forEach((pre) => {
+  root.querySelectorAll('pre:not(.fm-json):not(.html-preview-srcdoc):not(.chart-render-spec)').forEach((pre) => {
     if (pre.closest('.markdown-code-block')) return
 
     const parent = pre.parentNode
@@ -356,15 +362,21 @@ onMounted(async () => {
   replaceHtmlPreservingPreviews(pendingMarkdownHtml)
   await nextTick()
   enhanceHtmlPreviews()
+  await enhanceChartContainers(previewRef.value, chartInstancesMap)
   enhanceKbImages()
   if (props.codeCopy) enhanceCodeBlocks()
 })
 
 window.addEventListener('message', handleHtmlPreviewHeight)
 
+const handleChartResize = () => resizeChartInstances(chartInstancesMap)
+window.addEventListener('resize', handleChartResize)
+
 onBeforeUnmount(() => {
   window.removeEventListener('message', handleHtmlPreviewHeight)
+  window.removeEventListener('resize', handleChartResize)
   htmlPreviewFrames.clear()
+  cleanupChartInstances(null, chartInstancesMap)
   revokeKbImageBlobUrls()
 })
 
@@ -378,6 +390,7 @@ watch(
 
     if (!content) {
       htmlPreviewFrames.clear()
+      cleanupChartInstances(null, chartInstancesMap)
       revokeKbImageBlobUrls()
       replaceHtmlPreservingPreviews('')
       return
@@ -388,10 +401,12 @@ watch(
       replaceHtmlPreservingPreviews(html)
       revokeKbImageBlobUrls()
       cleanupHtmlPreviewFrames()
+      cleanupChartInstances(previewRef.value, chartInstancesMap)
 
       await nextTick()
       if (expired) return
       enhanceHtmlPreviews()
+      await enhanceChartContainers(previewRef.value, chartInstancesMap)
       enhanceKbImages()
       if (codeCopy) enhanceCodeBlocks()
       cleanupHtmlPreviewFrames()
@@ -1124,6 +1139,38 @@ const showCopiedFeedback = (btn) => {
       background: rgba(255, 255, 255, 0.15);
       color: var(--gray-100);
     }
+  }
+
+  .chart-render-container {
+    position: relative;
+    width: 100%;
+    margin: 12px 0;
+    border: 1px solid var(--gray-100);
+    border-radius: 8px;
+    background: var(--gray-0);
+    overflow: hidden;
+  }
+
+  .chart-render-canvas {
+    width: 100%;
+  }
+
+  .chart-render-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 60px;
+    color: var(--gray-400);
+    font-size: 13px;
+  }
+
+  .chart-render-spec {
+    display: none;
+  }
+
+  &.is-dark .chart-render-container {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.03);
   }
 }
 </style>

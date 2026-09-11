@@ -174,6 +174,54 @@ async def _startup(app: FastAPI) -> None:
         operation=init_sandbox_provider,
     )
 
+    # 注册并启动 IM Channel
+    async def initialize_channels() -> None:
+        """注册 Channel 类型，从 DB 加载配置并启动已启用的 Channel。"""
+        from yuxi.services.channels.manager import register_channel_type
+        from yuxi.services.channels.feishu import FeishuChannel
+        from yuxi.services.channels.dingtalk import DingTalkChannel
+        from yuxi.services.channels.wecom import WeComChannel
+        from yuxi.services.channels.base import ChannelConfig
+        from yuxi.services.channels.repository import ChannelConfigRepository
+        from server.routers.channel_router import get_channel_manager
+
+        for _type, _cls in [("feishu", FeishuChannel), ("dingtalk", DingTalkChannel), ("wecom", WeComChannel)]:
+            try:
+                register_channel_type(_type, _cls)
+            except ValueError:
+                pass  # 已注册
+
+        # 从数据库加载已配置的 Channel 并启动已启用的
+        manager = get_channel_manager()
+        async with pg_manager.get_async_session_context() as session:
+            repo = ChannelConfigRepository(session)
+            rows = await repo.list_all()
+
+        for row in rows:
+            if not row.enabled:
+                continue
+            config = ChannelConfig(
+                slug=row.slug,
+                channel_type=row.channel_type,
+                enabled=row.enabled,
+                credentials=row.credentials or {},
+                extra=row.extra or {},
+                agent_slug=row.agent_slug,
+            )
+            try:
+                await manager.create_channel(config)
+                await manager.start_channel(row.slug)
+                logger.info(f"Channel '{row.slug}' ({row.channel_type}) 已启动")
+            except Exception as e:
+                logger.warning(f"启动 Channel '{row.slug}' 失败: {e}")
+
+    await _initialize_startup_component(
+        app,
+        name="channels",
+        required=False,
+        operation=initialize_channels,
+    )
+
     app.state.startup_complete = True
     logger.info(f"""
 
@@ -208,6 +256,14 @@ def _close_neo4j_connection() -> object:
     return close_shared_neo4j_connection()
 
 
+async def _shutdown_channels() -> None:
+    """停止所有运行中的 Channel。"""
+    from server.routers.channel_router import get_channel_manager
+
+    manager = get_channel_manager()
+    await manager.stop_all()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """确保 startup 任意阶段失败时仍执行已取得资源的补偿清理。"""
@@ -220,6 +276,7 @@ async def lifespan(app: FastAPI):
     finally:
         app.state.startup_complete = False
         await _shutdown_component("sandbox_provider", shutdown_sandbox_provider)
+        await _shutdown_component("channels", _shutdown_channels)
         await _shutdown_component("queue_clients", close_queue_clients)
         await _shutdown_component("neo4j", _close_neo4j_connection)
         await _shutdown_component("postgres", pg_manager.close)

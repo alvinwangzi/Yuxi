@@ -1,5 +1,6 @@
 from .context import context_aware_prompt, context_based_model
 from .dynamic_tool import DynamicToolMiddleware
+from .execution_mode import ExecutionModeMiddleware
 from .memory import create_memory_middleware
 from .model_input import ImageInputCompatibilityMiddleware
 from .steer import SteerMiddleware
@@ -8,6 +9,7 @@ from .token_usage import TokenUsageMiddleware
 
 __all__ = [
     "DynamicToolMiddleware",
+    "ExecutionModeMiddleware",
     "ImageInputCompatibilityMiddleware",
     "SteerMiddleware",
     "TokenUsageMiddleware",

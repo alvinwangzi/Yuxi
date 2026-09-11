@@ -75,6 +75,7 @@ class AgentRunCreate(BaseModel):
     image_content: str | None = Field(None, description="可选，base64 图片内容")
     model_spec: str | None = Field(None, description="可选，对话级模型覆盖，优先级高于智能体配置")
     tool_approval_mode: str | None = Field(None, description="可选，本次运行的工具审批模式覆盖")
+    execution_mode: str | None = Field(None, description="可选，本次运行的执行模式覆盖（fast/balanced/deep_think）")
     resume: Any | None = Field(None, description="可选，恢复时传给 LangGraph 的输入载荷，非布尔值")
     created_by_run_id: str | None = Field(None, description="可选，创建本 run 的父 run ID；resume 时为被恢复的 run ID")
     queue_policy: str = Field(
@@ -329,7 +330,7 @@ async def create_agent_run(
             request_id=request_id,
             input_message=input_message,
             origin=RunOrigin(source="chat", channel="web"),
-            request_metadata={**meta, "tool_approval_mode": payload.tool_approval_mode},
+            request_metadata={**meta, "tool_approval_mode": payload.tool_approval_mode, "execution_mode": payload.execution_mode},
             model_spec=payload.model_spec,
             tool_approval_mode=payload.tool_approval_mode,
             queue_policy=payload.queue_policy,

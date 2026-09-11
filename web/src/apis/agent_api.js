@@ -132,6 +132,7 @@ export const agentApi = {
       image_content: data.image_content || null,
       model_spec: data.model_spec || null,
       tool_approval_mode: data.tool_approval_mode ?? null,
+      execution_mode: data.execution_mode ?? null,
       resume: data.resume ?? null,
       created_by_run_id: data.created_by_run_id || null,
       queue_policy: data.queue_policy || 'enqueue'

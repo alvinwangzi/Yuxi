@@ -236,6 +236,7 @@ export function useAgentRunStream({
       saveActiveRunSnapshot(threadId, runId, ts.runLastSeq)
     } else {
       ts.activeRunId = null
+      ts.activeRunCreatedAt = null
       clearActiveRunSnapshot(threadId)
       if (settlesIdleThread) {
         touchedThreadIds.forEach((id) => {
@@ -450,6 +451,7 @@ export function useAgentRunStream({
       try {
         const runRes = await agentApi.getAgentRun(ts.activeRunId)
         const run = runRes?.run
+        if (run?.created_at) ts.activeRunCreatedAt = run.created_at
         if (run?.status === RUN_INTERRUPTED_STATUS) {
           stopRunStreamSubscription(threadId)
           const snapshot = loadActiveRunSnapshot(threadId)
@@ -480,6 +482,7 @@ export function useAgentRunStream({
         try {
           const runRes = await agentApi.getAgentRun(snapshot.run_id)
           const run = runRes?.run
+          if (run?.created_at) ts.activeRunCreatedAt = run.created_at
           if (run?.status === RUN_INTERRUPTED_STATUS) {
             // 仅当本地仍持有该中断时才据快照恢复；否则不能仅凭快照重放旧中断
             // （可能已被回复），交由下方 active_run 做权威判定。
@@ -511,6 +514,7 @@ export function useAgentRunStream({
     try {
       const active = await agentApi.getThreadActiveRun(threadId)
       const run = active?.run
+      if (run?.created_at) ts.activeRunCreatedAt = run.created_at
       if (run?.status === RUN_INTERRUPTED_STATUS) {
         if (hasPendingInterruptForRun(ts, run.id)) {
           await preserveInterruptedRun(threadId, run)

@@ -252,6 +252,13 @@
                   :inert="currentToolApprovalVisible"
                   :aria-hidden="currentToolApprovalVisible ? 'true' : undefined"
                 >
+                  <SlashCommandMenu
+                    ref="slashMenuRef"
+                    :skills="slashCommandSkills"
+                    :filter-text="slashFilterText"
+                    :visible="slashMenuVisible"
+                    @select="handleSlashSelect"
+                  />
                   <AgentInputArea
                     ref="agentInputAreaRef"
                     v-model="userInput"
@@ -264,6 +271,7 @@
                     :supports-file-upload="supportsFileUpload"
                     :attachments="currentPendingThreadAttachments"
                     @send="handleSendOrStop"
+                    @keydown="handleSlashKeyNav"
                     @upload-attachment="handleAttachmentUpload"
                     @remove-attachment="handleAttachmentRemove"
                   >
@@ -278,6 +286,10 @@
                       <ToolApprovalModeSelector
                         :model-value="currentToolApprovalMode"
                         @update:model-value="handleToolApprovalModeSelect"
+                      />
+                      <ExecutionModeSelector
+                        :model-value="currentExecutionMode"
+                        @update:model-value="handleExecutionModeSelect"
                       />
                       <slot
                         name="input-actions-left"
@@ -856,6 +868,8 @@ import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-des
 import AgentInputArea from '@/components/AgentInputArea.vue'
 import ContextUsageRing from '@/components/ContextUsageRing.vue'
 import ToolApprovalModeSelector from '@/components/ToolApprovalModeSelector.vue'
+import ExecutionModeSelector from '@/components/ExecutionModeSelector.vue'
+import SlashCommandMenu from '@/components/SlashCommandMenu.vue'
 import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 import AgentMessageComponent from '@/components/AgentMessageComponent.vue'
 import { formatEmptyRunStatus, isConversationSettled as isRunConversationSettled } from '@/utils/conversationProcessGrouping'
@@ -957,8 +971,20 @@ const { threads, currentThreadId, currentThread, threadCreationInFlight } =
 const threadDraftStore = createThreadDraftStore()
 const threadDraftSession = createThreadDraftSession(threadDraftStore, currentThreadId.value)
 const userInput = ref(threadDraftStore.read(currentThreadId.value || DRAFT_THREAD_ID))
-watch(userInput, (text) => threadDraftSession.saveInput(text))
+watch(userInput, (text) => {
+  threadDraftSession.saveInput(text)
+  // 斜杠命令检测：输入以 / 开头且无换行时触发菜单
+  if (text && text.startsWith('/') && !text.includes('\n')) {
+    slashFilterText.value = text.slice(1)
+    slashMenuVisible.value = true
+  } else {
+    slashMenuVisible.value = false
+  }
+})
 const agentInputAreaRef = ref(null)
+const slashMenuRef = ref(null)
+const slashMenuVisible = ref(false)
+const slashFilterText = ref('')
 const sendCooldownActive = ref(false)
 const cancellingRequestIds = reactive(new Set())
 const steeringRequestIds = reactive(new Set())
@@ -1425,6 +1451,24 @@ const handleToolApprovalModeSelect = async (mode) => {
     thread.metadata = previousMetadata
     message.error('审批模式保存失败')
   }
+}
+
+const VALID_EXECUTION_MODES = new Set(['fast', 'balanced', 'deep_think'])
+const configuredAgentExecutionMode = computed(() => {
+  const configJson = currentAgent.value?.config_json
+  const mode = configJson?.context?.execution_mode || configJson?.execution_mode || null
+  return VALID_EXECUTION_MODES.has(mode) ? mode : 'balanced'
+})
+const currentExecutionMode = computed(() => {
+  const threadMode = currentThread.value?.metadata?.execution_mode
+  if (VALID_EXECUTION_MODES.has(threadMode)) return threadMode
+  return configuredAgentExecutionMode.value
+})
+const handleExecutionModeSelect = async (mode) => {
+  if (!VALID_EXECUTION_MODES.has(mode)) return
+  const thread = currentThread.value
+  if (!thread) return
+  thread.metadata = { ...(thread.metadata || {}), execution_mode: mode }
 }
 
 const currentThreadAgentName = computed(() => {
@@ -1922,6 +1966,34 @@ const { mentionConfig } = useAgentMentionConfig({
   agentConfig
 })
 
+// 斜杠命令：从当前 Agent 的 mention skills 获取可用技能列表
+const slashCommandSkills = computed(() => mentionConfig.value?.skills || [])
+const handleSlashSelect = (skill) => {
+  if (!skill?.slug) return
+  userInput.value = `/${skill.slug} `
+  slashMenuVisible.value = false
+  nextTick(() => agentInputAreaRef.value?.focus())
+}
+const handleSlashKeyNav = (e) => {
+  if (!slashMenuVisible.value || !slashMenuRef.value) return
+  const { filteredSkills, selectedIndex } = slashMenuRef.value
+  if (!filteredSkills.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    selectedIndex.value = (selectedIndex.value + 1) % filteredSkills.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    selectedIndex.value = (selectedIndex.value - 1 + filteredSkills.length) % filteredSkills.length
+  } else if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    const selected = filteredSkills[selectedIndex.value]
+    if (selected) handleSlashSelect(selected)
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    slashMenuVisible.value = false
+  }
+}
+
 const currentThreadMessages = computed(() => threadMessages.value[currentChatId.value] || [])
 const currentThreadRuns = computed(() => threadRuns.value[currentChatId.value] || [])
 const currentRunById = computed(() => new Map(currentThreadRuns.value.map((run) => [run.run_id, run])))
@@ -2401,7 +2473,7 @@ const replyLoadingText = computed(() => {
 })
 const replyElapsedSeconds = ref(0)
 let replyElapsedTimer = null
-let replyStartedAt = null
+const replyStartedAt = ref(null)
 const replyElapsedLabel = computed(() => {
   const seconds = replyElapsedSeconds.value
   if (!seconds) return ''
@@ -2410,13 +2482,20 @@ const replyElapsedLabel = computed(() => {
   return `${minutes}分${seconds % 60}s`
 })
 const updateReplyElapsedSeconds = () => {
-  if (!replyStartedAt) return
-  replyElapsedSeconds.value = Math.floor((Date.now() - replyStartedAt) / 1000)
+  const startTs = replyStartedAt.value
+  if (!startTs) return
+  replyElapsedSeconds.value = Math.floor((Date.now() - startTs) / 1000)
 }
 const startReplyElapsedTimer = ({ reset = false } = {}) => {
   stopReplyElapsedTimer()
-  if (reset || !replyStartedAt) {
-    replyStartedAt = Date.now()
+  const runCreatedAt = currentThreadState.value?.activeRunCreatedAt
+  if (reset || !replyStartedAt.value) {
+    replyStartedAt.value = runCreatedAt ? new Date(runCreatedAt).getTime() : Date.now()
+  } else if (runCreatedAt) {
+    const runTs = new Date(runCreatedAt).getTime()
+    if (replyStartedAt.value > runTs) {
+      replyStartedAt.value = runTs
+    }
   }
   updateReplyElapsedSeconds()
   replyElapsedTimer = window.setInterval(updateReplyElapsedSeconds, 1000)
@@ -2427,7 +2506,7 @@ const stopReplyElapsedTimer = ({ reset = false } = {}) => {
     replyElapsedTimer = null
   }
   if (reset) {
-    replyStartedAt = null
+    replyStartedAt.value = null
     replyElapsedSeconds.value = 0
   }
 }
@@ -2441,6 +2520,17 @@ watch(
     }
   },
   { immediate: true }
+)
+watch(
+  () => currentThreadState.value?.activeRunCreatedAt,
+  (runCreatedAt) => {
+    if (!runCreatedAt || replyElapsedTimer === null) return
+    const runTs = new Date(runCreatedAt).getTime()
+    if (!replyStartedAt.value || replyStartedAt.value > runTs) {
+      replyStartedAt.value = runTs
+      updateReplyElapsedSeconds()
+    }
+  }
 )
 const isSendButtonDisabled = computed(() => {
   return (
@@ -2805,7 +2895,7 @@ const createThread = async (agentId, title = '新的对话', projectId = '', req
     const thread = await chatThreadsStore.createThread(
       agentId,
       title,
-      { tool_approval_mode: currentToolApprovalMode.value },
+      { tool_approval_mode: currentToolApprovalMode.value, execution_mode: currentExecutionMode.value },
       {
         requestId,
         projectId: projectId || undefined
@@ -3283,6 +3373,7 @@ const handleSendMessage = async ({ image, queuePolicy = 'enqueue' } = {}) => {
   // 每次请求都下发输入框展示的模型，后端在同一事务内绑定到 Conversation。
   const modelSpec = currentModelSpec.value || null
   const toolApprovalMode = currentToolApprovalMode.value
+  const executionMode = currentExecutionMode.value
 
   userInput.value = ''
 
@@ -3360,6 +3451,7 @@ const handleSendMessage = async ({ image, queuePolicy = 'enqueue' } = {}) => {
       image_content: imageContent,
       model_spec: modelSpec,
       tool_approval_mode: toolApprovalMode,
+      execution_mode: executionMode,
       queue_policy: queuePolicy
     })
     const status = runResp?.status
@@ -4369,6 +4461,7 @@ watch(currentChatId, (threadId, oldThreadId) => {
     }
 
     .message-input-surface {
+      position: relative;
       min-width: 0;
       transition: opacity 0.18s ease;
     }

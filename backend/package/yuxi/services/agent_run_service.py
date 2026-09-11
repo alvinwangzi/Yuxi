@@ -493,6 +493,7 @@ async def create_agent_run_view(
     input_payload = {
         "model_spec": resolved_model_spec,
         "tool_approval_mode": resolved_tool_approval_mode,
+        "execution_mode": (meta or {}).get("execution_mode"),
     }
     if run_type == "resume" and scope.parent_run is not None:
         if source is None:

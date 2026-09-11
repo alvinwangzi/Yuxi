@@ -19,6 +19,7 @@ from yuxi.agents.context import (
     prepare_agent_runtime_context,
 )
 from yuxi.agents.middlewares import (
+    ExecutionModeMiddleware,
     ImageInputCompatibilityMiddleware,
     TokenUsageMiddleware,
     create_summary_middleware_from_context,
@@ -99,6 +100,7 @@ async def _build_middlewares(context, backend, tool_approval_mode: str):
         await create_summary_middleware_from_context(context, backend=backend),
         TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
         PatchToolCallsMiddleware(),
+        ExecutionModeMiddleware(),
         _SubAgentToolFilterMiddleware(tool_approval_mode),
         ModelRetryMiddleware(),
         ImageInputCompatibilityMiddleware(),

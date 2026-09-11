@@ -228,6 +228,20 @@ class BaseContext:
         },
     )
 
+    execution_mode: str = field(
+        default="balanced",
+        metadata={
+            "name": "执行模式",
+            "description": "控制 Agent 的推理深度和响应风格。",
+            "options": [
+                {"key": "fast", "name": "快速", "description": "减少推理深度，适合简单问答"},
+                {"key": "balanced", "name": "均衡", "description": "默认模式，平衡速度与质量"},
+                {"key": "deep_think", "name": "深度思考", "description": "增强推理，适合复杂分析和研究任务"},
+            ],
+            "type": "string",
+        },
+    )
+
     tools: list[str] | None = field(
         default=None,
         metadata={

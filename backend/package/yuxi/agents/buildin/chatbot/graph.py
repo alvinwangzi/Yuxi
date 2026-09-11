@@ -14,6 +14,7 @@ from yuxi.agents.context import (
     prepare_agent_runtime_context,
 )
 from yuxi.agents.middlewares import (
+    ExecutionModeMiddleware,
     ImageInputCompatibilityMiddleware,
     SteerMiddleware,
     TokenUsageMiddleware,
@@ -52,6 +53,7 @@ async def _build_middlewares(context, backend):
             await create_summary_middleware_from_context(context, backend=backend),
             TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
             PatchToolCallsMiddleware(),
+            ExecutionModeMiddleware(),
             ModelRetryMiddleware(max_retries=getattr(context, "model_retry_times", 2)),
             ImageInputCompatibilityMiddleware(),
             TokenUsageMiddleware(),

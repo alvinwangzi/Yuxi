@@ -1747,6 +1747,7 @@ def list_builtin_skill_specs() -> list[dict[str, Any]]:
                 "skill_dependencies": configured_skills or normalize_string_list(meta.get("skill_dependencies")),
                 "content_hash": _compute_dir_hash(source_dir),
                 "source_dir": source_dir,
+                "auto_install": bool(getattr(raw_spec, "auto_install", True)),
             }
         )
 
@@ -1768,6 +1769,29 @@ async def init_builtin_skills(db: AsyncSession, *, created_by: str = "system") -
 
         target_dir = get_skills_root_dir() / slug
         _replace_skill_target(target_dir, Path(spec["source_dir"]))
+
+        # auto_install=False 的 skill 不自动启用，仅在已存在时同步元数据
+        auto_install = spec.get("auto_install", True)
+        if not existing and not auto_install:
+            # 创建但默认禁用，管理员可手动启用
+            synced_items.append(
+                await repo.create(
+                    slug=slug,
+                    name=spec["name"],
+                    description=spec["description"],
+                    source_type="builtin",
+                    tool_dependencies=spec["tool_dependencies"],
+                    mcp_dependencies=spec["mcp_dependencies"],
+                    skill_dependencies=spec["skill_dependencies"],
+                    dir_path=_build_builtin_skill_dir_path(slug),
+                    share_config=BUILTIN_SKILL_SHARE_CONFIG.copy(),
+                    enabled=False,
+                    version=spec["version"],
+                    content_hash=spec["content_hash"],
+                    created_by=created_by or BUILTIN_SKILL_OPERATOR,
+                )
+            )
+            continue
 
         if existing:
             existing.dir_path = _build_builtin_skill_dir_path(slug)

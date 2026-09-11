@@ -1402,3 +1402,36 @@ Index(
     AgentRunRequest.created_at,
     AgentRunRequest.id,
 )
+
+
+class ChannelConfigDB(Base):
+    """IM Channel 配置持久化模型"""
+
+    __tablename__ = "channel_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String(64), nullable=False, unique=True, index=True, comment="Channel 唯一标识")
+    channel_type = Column(String(32), nullable=False, comment="Channel 类型（feishu/dingtalk/wecom）")
+    enabled = Column(Boolean, nullable=False, default=True, comment="是否启用")
+    credentials = Column(JSON_VALUE, nullable=False, default=dict, comment="凭据配置（加密存储）")
+    extra = Column(JSON_VALUE, nullable=False, default=dict, comment="额外配置")
+    agent_slug = Column(String(128), nullable=True, comment="默认目标 Agent slug")
+    created_by = Column(String(64), nullable=True)
+    updated_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "slug": self.slug,
+            "channel_type": self.channel_type,
+            "enabled": bool(self.enabled),
+            "credentials": self.credentials or {},
+            "extra": self.extra or {},
+            "agent_slug": self.agent_slug,
+            "created_by": self.created_by,
+            "updated_by": self.updated_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }

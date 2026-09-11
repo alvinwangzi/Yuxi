@@ -6,6 +6,7 @@ from server.routers.agent_invocation_eval_router import agent_invocation_eval_ro
 from server.routers.agent_router import agent_router
 from server.routers.auth_dept_router import department
 from server.routers.auth_router import auth
+from server.routers.channel_router import channel_router
 from server.routers.chat_router import chat
 from server.routers.dashboard_router import dashboard
 from server.routers.external_kb_router import external_kb
@@ -45,6 +46,7 @@ router.include_router(department)  # /api/departments/* 部门与权限相关数
 router.include_router(tasks)  # /api/tasks/* 后台任务查询与管理
 router.include_router(mcp)  # /api/system/mcp-servers/* MCP 服务管理
 router.include_router(model_providers)  # /api/system/model-providers/* 独立模型配置
+router.include_router(channel_router)  # /api/system/channels/* IM 频道管理
 router.include_router(skills)  # /api/system/skills/* Skills 管理
 router.include_router(user_skills)  # /api/skills/* 用户可用 Skills
 router.include_router(tools)  # /api/system/tools/* 工具列表与配置

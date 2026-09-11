@@ -8,6 +8,7 @@ import { escapeHtml } from './html.js'
 import { normalizeCodeLanguage } from './file_preview.js'
 import { renderSvgBlocks } from './svgRenderer.js'
 import { renderHtmlPreviewBlocks } from './htmlPreviewRenderer.js'
+import { renderChartBlocks } from './chartRenderer.js'
 import { createMarkdownRenderCache } from './markdownRenderCache.js'
 
 const markdownKatexPlugin = markdownItKatex.default || markdownItKatex
@@ -213,23 +214,24 @@ export const renderMarkdown = async (content, { theme = 'github-light' } = {}) =
       sanitizeHtml: sanitizeHtmlPreviewSrcdoc
     })
     const svgContent = renderSvgBlocks(htmlPreviewContent)
+    const chartContent = renderChartBlocks(svgContent)
     const themeName = normalizeTheme(theme)
     const needsHighlight = hasCodeFence(svgContent)
-    const cacheKey = `${needsHighlight ? themeName : 'plain'}\u0000${svgContent}`
+    const cacheKey = `${needsHighlight ? themeName : 'plain'}\u0000${chartContent}`
     const cachedHtml = renderedHtmlCache.get(cacheKey)
     if (cachedHtml !== undefined) return cachedHtml
 
     if (needsHighlight) {
       try {
         const highlighter = await getHighlighter()
-        await ensureLanguages(highlighter, collectCodeFenceLanguages(svgContent))
+        await ensureLanguages(highlighter, collectCodeFenceLanguages(chartContent))
       } catch (error) {
         console.warn('Markdown languages unavailable, continuing without code highlighting:', error)
       }
     }
 
     const md = await getRenderer(themeName, needsHighlight)
-    const html = DOMPurify.sanitize(md.render(svgContent), {
+    const html = DOMPurify.sanitize(md.render(chartContent), {
       ADD_TAGS: ['input'],
       ADD_ATTR: [
         'class',
@@ -241,7 +243,10 @@ export const renderMarkdown = async (content, { theme = 'github-light' } = {}) =
         'disabled',
         'source',
         'colspan',
-        'rowspan'
+        'rowspan',
+        'data-chart-init',
+        'data-chart-id',
+        'data-chart-error'
       ]
     })
     renderedHtmlCache.set(cacheKey, html)

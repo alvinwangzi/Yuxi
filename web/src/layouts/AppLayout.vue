@@ -6,6 +6,7 @@ import {
   BarChart3,
   ClipboardList,
   LibraryBig,
+  Puzzle,
   Box,
   HardDrive,
   PanelLeft,
@@ -161,6 +162,22 @@ const mainList = computed(() => {
   })
 
   items.push({
+    name: '定时任务',
+    path: '/scheduled-agents',
+    activePaths: ['/scheduled-agents'],
+    icon: ClipboardList,
+    activeIcon: ClipboardList
+  })
+
+  items.push({
+    name: '技能 · 连接器',
+    path: '/skills',
+    activePaths: ['/skills'],
+    icon: Puzzle,
+    activeIcon: Puzzle
+  })
+
+  items.push({
     name: '个人空间',
     path: '/workspace',
     icon: HardDrive,
@@ -168,7 +185,7 @@ const mainList = computed(() => {
   })
 
   items.push({
-    name: '知识库 · 技能',
+    name: '知识库',
     path: '/extensions',
     activePaths: ['/extensions'],
     icon: LibraryBig,
