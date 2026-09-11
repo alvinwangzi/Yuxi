@@ -9,10 +9,10 @@ import {
   inferMcpCategory
 } from '../../src/utils/itemCategory.js'
 
-test('CATEGORIES 包含全部 9 个分类 key', () => {
+test('CATEGORIES 包含全部 10 个分类 key', () => {
   assert.deepEqual(CATEGORIES, [
     'all', 'office', 'dev', 'data', 'content',
-    'info', 'business', 'productivity', 'other'
+    'info', 'business', 'enterprise', 'productivity', 'other'
   ])
 })
 
@@ -23,6 +23,7 @@ test('CATEGORY_LABELS 提供中文标签', () => {
   assert.equal(CATEGORY_LABELS.content, '内容创作')
   assert.equal(CATEGORY_LABELS.info, '信息资讯')
   assert.equal(CATEGORY_LABELS.business, '商业运营')
+  assert.equal(CATEGORY_LABELS.enterprise, '企业管理')
   assert.equal(CATEGORY_LABELS.productivity, '效率工具')
   assert.equal(CATEGORY_LABELS.other, '其他')
   assert.equal(CATEGORY_LABELS.all, '全部')
@@ -56,6 +57,14 @@ test('inferSkillCategory 匹配内容创作', () => {
 
 test('inferSkillCategory 匹配商业运营', () => {
   assert.equal(inferSkillCategory({ slug: 'consulting-analysis', name: 'Consulting Analysis', tool_dependencies: [], mcp_dependencies: [] }), 'business')
+})
+
+test('inferSkillCategory 匹配企业管理', () => {
+  assert.equal(inferSkillCategory({ slug: 'salary-system', name: '薪酬体系', tool_dependencies: [], mcp_dependencies: [] }), 'enterprise')
+  assert.equal(inferSkillCategory({ slug: 'talent-review', name: '人才盘点', tool_dependencies: [], mcp_dependencies: [] }), 'enterprise')
+  assert.equal(inferSkillCategory({ slug: 'strategy-planning', name: '战略规划', tool_dependencies: [], mcp_dependencies: [] }), 'enterprise')
+  assert.equal(inferSkillCategory({ slug: 'hr-planning', name: '人力资源规划', tool_dependencies: [], mcp_dependencies: [] }), 'enterprise')
+  assert.equal(inferSkillCategory({ slug: 'company-diagnosis', name: '企业组织诊断', tool_dependencies: [], mcp_dependencies: [] }), 'enterprise')
 })
 
 test('inferSkillCategory 未匹配归入 other', () => {

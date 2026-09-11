@@ -7,6 +7,7 @@ export const CATEGORIES = [
   'content',
   'info',
   'business',
+  'enterprise',
   'productivity',
   'other'
 ]
@@ -20,6 +21,7 @@ export const CATEGORY_LABELS = {
   content: '内容创作',
   info: '信息资讯',
   business: '商业运营',
+  enterprise: '企业管理',
   productivity: '效率工具',
   other: '其他'
 }
@@ -74,9 +76,18 @@ const CATEGORY_KEYWORDS = [
     words: [
       'crm', 'marketing', 'sales', 'ecommerce', 'shop', 'finance', 'invoice',
       'project', 'consult', 'analysis', 'management', 'enterprise', 'report',
-      'plan', 'strategy', 'hr', 'erp', 'contract', 'proposal',
+      'erp', 'contract', 'proposal',
       '营销', '销售', '电商', '财务', '项目', '运营', '客户', '咨询',
-      '管理', '企业', '报告', '商业'
+      '管理', '报告', '商业'
+    ]
+  },
+  {
+    key: 'enterprise',
+    words: [
+      'compensation', 'talent', 'diagnosis', 'training', 'recruit',
+      'performance', 'payroll', 'strategy', 'hr',
+      '薪酬', '人才', '诊断', '培训', '组织', '绩效', '招聘', '员工',
+      '战略', '盘点', '人力', '干部', '团队管理'
     ]
   },
   {
