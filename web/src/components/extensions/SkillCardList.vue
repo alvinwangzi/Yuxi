@@ -608,7 +608,6 @@ const importing = ref(false)
 const listingRemoteSkills = ref(false)
 const searchQuery = ref('')
 const selectedCategory = ref('all')
-const selectedCategory = ref('all')
 
 const isBatchDeleteMode = ref(false)
 const selectedCardSlugs = ref([])
