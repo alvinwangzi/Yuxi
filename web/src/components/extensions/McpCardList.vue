@@ -14,6 +14,20 @@
       </template>
     </PageShoulder>
 
+    <div class="category-tab-bar">
+      <button
+        v-for="key in CATEGORIES"
+        :key="key"
+        type="button"
+        class="tab-item"
+        :class="{ active: selectedCategory === key }"
+        @click="selectedCategory = key"
+      >
+        {{ CATEGORY_LABELS[key] }}
+        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
+      </button>
+    </div>
+
     <div
       v-if="filteredEnabledServers.length === 0 && filteredDisabledServers.length === 0"
       class="extension-card-grid-empty-state"
@@ -170,29 +184,52 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import PageShoulder from '@/components/shared/PageShoulder.vue'
 import McpFormModal from './McpFormModal.vue'
 import { formatExtensionCardTitle } from '@/utils/extensionDisplayName'
+import { CATEGORIES, CATEGORY_LABELS, inferMcpCategory } from '@/utils/itemCategory'
 
 const router = useRouter()
 
 const loading = ref(false)
 const servers = ref([])
 const searchQuery = ref('')
+const selectedCategory = ref('all')
 const formModalVisible = ref(false)
 const basicInfoVisible = ref(false)
 const previewServer = ref(null)
 const actionLoadingSlug = ref('')
 
 const filteredServers = computed(() => {
-  const sorted = [...servers.value].sort((a, b) =>
-    String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN', {
-      sensitivity: 'base',
-      numeric: true
-    })
-  )
-  if (!searchQuery.value) return sorted
+  const sorted = [...servers.value]
+    .map((s) => ({
+      ...s,
+      category: inferMcpCategory({ name: s.name || '', description: s.description || '', tags: s.tags || [] })
+    }))
+    .sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN', {
+        sensitivity: 'base',
+        numeric: true
+      })
+    )
+  let result = sorted
+  if (selectedCategory.value !== 'all') {
+    result = result.filter((s) => s.category === selectedCategory.value)
+  }
+  if (!searchQuery.value) return result
   const q = searchQuery.value.toLowerCase()
-  return sorted.filter(
+  return result.filter(
     (s) => s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q)
   )
+})
+const categoryCounts = computed(() => {
+  const allServers = servers.value.map((s) => ({
+    ...s,
+    category: inferMcpCategory({ name: s.name || '', description: s.description || '', tags: s.tags || [] })
+  }))
+  const counts = { all: allServers.length }
+  for (const key of CATEGORIES) {
+    if (key === 'all') continue
+    counts[key] = allServers.filter((s) => s.category === key).length
+  }
+  return counts
 })
 
 const filteredEnabledServers = computed(() =>
@@ -474,5 +511,53 @@ defineExpose({ fetchServers, loading })
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.category-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px var(--page-padding) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-item {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--gray-600);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+      color: var(--gray-900);
+      background-color: color-mix(in srgb, var(--gray-800) 4%, var(--gray-0));
+    }
+
+    &.active {
+      color: var(--gray-2000);
+      background-color: color-mix(in srgb, var(--gray-800) 6%, var(--gray-0));
+    }
+  }
+
+  .tab-count {
+    margin-left: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-400);
+  }
 }
 </style>
