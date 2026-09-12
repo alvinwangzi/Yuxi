@@ -66,6 +66,15 @@
           </div>
           <div
             class="sider-item"
+            :class="{ activesec: activeTab === 'design' }"
+            @click="activeTab = 'design'"
+            v-if="userStore.isAdmin"
+          >
+            <Palette class="icon" :size="18" />
+            <span>设计</span>
+          </div>
+          <div
+            class="sider-item"
             :class="{ activesec: activeTab === 'user' }"
             @click="activeTab = 'user'"
             v-if="userStore.isAdmin"
@@ -154,6 +163,14 @@
         </div>
         <div
           class="nav-item"
+          :class="{ active: activeTab === 'design' }"
+          @click="activeTab = 'design'"
+          v-if="userStore.isAdmin"
+        >
+          设计
+        </div>
+        <div
+          class="nav-item"
           :class="{ active: activeTab === 'department' }"
           @click="activeTab = 'department'"
           v-if="userStore.isSuperAdmin"
@@ -201,6 +218,10 @@
             <OCRSettingsSection />
           </div>
 
+          <div v-show="activeTab === 'design'" v-if="userStore.isAdmin && loadedTabs.has('design')">
+            <DesignSettingsSection />
+          </div>
+
           <div v-show="activeTab === 'user'" v-if="userStore.isAdmin && loadedTabs.has('user')">
             <UserManagementComponent />
           </div>
@@ -225,6 +246,7 @@ import {
   CircleUser,
   Settings,
   Key,
+  Palette,
   ScanText,
   SquareTerminal,
   User,
@@ -250,6 +272,9 @@ const DepartmentManagementComponent = createAsyncPanel(
 )
 const ModelProviderManagePanel = createAsyncPanel(
   () => import('@/components/model-management/ModelProviderManagePanel.vue')
+)
+const DesignSettingsSection = createAsyncPanel(
+  () => import('@/components/settings/DesignSettingsSection.vue')
 )
 
 const props = defineProps({
@@ -281,7 +306,7 @@ const visible = computed({
 const availableTabs = computed(() => {
   const tabs = []
   if (userStore.isLoggedIn) tabs.push('account', 'apiKeys', 'agentEnv')
-  if (userStore.isAdmin) tabs.push('base', 'modelProviders', 'ocr', 'user')
+  if (userStore.isAdmin) tabs.push('base', 'modelProviders', 'ocr', 'design', 'user')
   if (userStore.isSuperAdmin) tabs.push('department')
   return tabs
 })
