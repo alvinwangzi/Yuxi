@@ -6,6 +6,7 @@ from server.routers.agent_invocation_eval_router import agent_invocation_eval_ro
 from server.routers.agent_router import agent_router
 from server.routers.auth_dept_router import department
 from server.routers.auth_router import auth
+from server.routers.category_router import router as category_router
 from server.routers.channel_router import channel_router
 from server.routers.chat_router import chat
 from server.routers.dashboard_router import dashboard
@@ -19,12 +20,14 @@ from server.routers.mcp_router import mcp
 from server.routers.mention_router import mention_router
 from server.routers.model_provider_router import model_providers
 from server.routers.project_router import projects
+from server.routers.role_router import role_router
 from server.routers.scheduled_agent_router import scheduled_agents
 from server.routers.skill_router import skills, user_skills
 from server.routers.system_router import system
 from server.routers.system_task_router import tasks
 from server.routers.tool_router import tools
 from server.routers.user_router import user_router
+from server.routers.workflow_router import workflow_router
 from server.routers.workspace_router import workspace, workspace_knowledge
 
 router = APIRouter()
@@ -38,6 +41,7 @@ router.include_router(agent_invocation_channel_router)  # /api/agent-invocation/
 router.include_router(agent_invocation_eval_router)  # /api/agent-invocation/eval/*
 router.include_router(chat)  # /api/chat/* 对话线程、消息历史与附件
 router.include_router(projects)  # /api/projects* 项目创建与选择
+router.include_router(role_router)  # /api/roles/* 角色模板库
 router.include_router(scheduled_agents)  # /api/scheduled-tasks* 用户自建 Agent 定时任务
 
 # 管理与工作台接口：后台任务、权限域以及工具体系配置。
@@ -46,10 +50,12 @@ router.include_router(department)  # /api/departments/* 部门与权限相关数
 router.include_router(tasks)  # /api/tasks/* 后台任务查询与管理
 router.include_router(mcp)  # /api/system/mcp-servers/* MCP 服务管理
 router.include_router(model_providers)  # /api/system/model-providers/* 独立模型配置
-router.include_router(channel_router)  # /api/system/channels/* IM 频道管理
+router.include_router(channel_router)  # /api/system/channels/* IM 渠道管理
+router.include_router(category_router)  # /api/admin/categories/* 分类管理（CRUD + 排序）
 router.include_router(skills)  # /api/system/skills/* Skills 管理
 router.include_router(user_skills)  # /api/skills/* 用户可用 Skills
 router.include_router(tools)  # /api/system/tools/* 工具列表与配置
+router.include_router(workflow_router)  # /api/workflows/* 工作流管理与执行
 router.include_router(user_router)  # /api/user/* 用户级配置与凭据
 router.include_router(filesystem_router)  # /api/viewer/filesystem/* 工作台文件系统视图
 router.include_router(workspace)  # /api/workspace/* 用户个人工作区
