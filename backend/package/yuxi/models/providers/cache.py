@@ -32,7 +32,7 @@ class ModelInfo:
     # 运行时配置
     api_key: str
     base_url: str
-    provider_type: str  # openai / anthropic / gemini / openrouter
+    provider_type: str  # openai / anthropic / gemini / openrouter / ollama
 
     # 可选配置
     headers: dict[str, str] = field(default_factory=dict)
@@ -218,3 +218,44 @@ def resolve_model_spec(spec: str) -> ModelInfo:
     all_specs = model_cache.get_all_specs()
     available = [item.spec for item in all_specs[:10]]
     raise ValueError(f"未找到模型: '{spec}'。可用模型 ({len(all_specs)}): {available}")
+
+
+def resolve_image_gen_env() -> dict[str, str]:
+    """从模型缓存解析所有启用的 image 类型模型，返回沙盒环境变量。
+
+    环境变量：
+    - IMAGE_GEN_API_KEY / IMAGE_GEN_BASE_URL / IMAGE_GEN_MODEL：默认（第一个）模型
+    - IMAGE_GEN_MODELS：全部可用模型的 JSON 数组，每项含 model/base_url/api_key，
+      供技能按用户需求选择不同质量/尺寸的模型
+    未配置 image 模型时返回空字典。
+    """
+    try:
+        image_models = model_cache.get_all_specs("image")
+        if not image_models:
+            return {}
+
+        # 默认模型取第一个
+        default = image_models[0]
+        env: dict[str, str] = {}
+        if default.api_key:
+            env["IMAGE_GEN_API_KEY"] = default.api_key
+        if default.base_url:
+            env["IMAGE_GEN_BASE_URL"] = default.base_url
+        env["IMAGE_GEN_MODEL"] = default.model_id
+
+        # 按 base_url 分组，同 provider 共享 api_key 不重复暴露
+        models_list: list[dict[str, str]] = []
+        for info in image_models:
+            entry: dict[str, str] = {"model": info.model_id}
+            if info.base_url:
+                entry["base_url"] = info.base_url
+            if info.api_key:
+                entry["api_key"] = info.api_key
+            if info.display_name and info.display_name != info.model_id:
+                entry["display_name"] = info.display_name
+            models_list.append(entry)
+        env["IMAGE_GEN_MODELS"] = json.dumps(models_list, ensure_ascii=False)
+
+        return env
+    except Exception:
+        return {}

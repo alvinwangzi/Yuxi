@@ -93,12 +93,13 @@ class RoleTemplateRepository:
     # ------------------------------------------------------------------
 
     async def get_deleted_role_keys(self) -> set[str]:
-        """查询已被逻辑删除的角色模板 role_key 集合。"""
-        try:
-            result = await self.db.execute(text("SELECT role_key FROM role_template_deletions"))
-            return {row[0] for row in result.fetchall()}
-        except Exception:
-            return set()
+        """查询已被逻辑删除的角色模板 role_key 集合。
+
+        表由 schema 迁移保证存在；查询失败时让异常直接抛出，
+        避免吞掉错误后事务处于 aborted 状态影响后续语句。
+        """
+        result = await self.db.execute(text("SELECT role_key FROM role_template_deletions"))
+        return {row[0] for row in result.fetchall()}
 
     async def is_role_deleted(self, role_key: str) -> bool:
         deleted = await self.get_deleted_role_keys()

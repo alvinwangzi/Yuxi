@@ -48,14 +48,14 @@
       </div>
     </div>
 
-    <!-- 已添加的频道 -->
+    <!-- 已添加的渠道 -->
     <div class="channel-section">
       <div class="channel-section-header">
-        <span class="channel-section-title">已添加的频道</span>
+        <span class="channel-section-title">已添加的渠道</span>
         <a-dropdown :trigger="['click']">
           <a-button type="primary" size="small" class="lucide-icon-btn">
             <BookOpen :size="14" />
-            <span>添加频道</span>
+            <span>添加渠道</span>
           </a-button>
           <template #overlay>
             <a-menu @click="handleAddFromMenu">
@@ -73,7 +73,7 @@
       >
         <a-empty
           :image="false"
-          description="暂无已添加的频道，点击上方按钮或上方渠道卡片添加"
+          description="暂无已添加的渠道，点击上方按钮或上方渠道卡片添加"
         />
       </div>
 
@@ -82,8 +82,8 @@
           v-for="ch in channels"
           :key="ch.slug"
           variant="mini"
-          :title="ch.slug"
-          :description="channelTypeLabel(ch.channel_type)"
+          :title="ch.name || ch.slug"
+          :description="channelCardDescription(ch)"
           @click="handleEditChannel(ch)"
         >
           <template #icon>
@@ -99,7 +99,7 @@
             <button
               type="button"
               class="mcp-card-action mcp-card-action-danger"
-              :aria-label="'删除频道'"
+              :aria-label="'删除渠道'"
               @click.stop="handleDeleteChannel(ch)"
             >
               <Trash2 :size="15" class="action-icon action-icon-trash" />
@@ -112,17 +112,23 @@
     <!-- 创建/编辑弹窗 -->
     <a-modal
       v-model:open="showCreateModal"
-      :title="editingChannel ? `编辑频道: ${editingChannel.slug}` : `添加频道 · ${channelTypeLabel(formState.channel_type)}`"
+      :title="editingChannel ? `编辑渠道: ${editingChannel.name || editingChannel.slug}` : `添加渠道 · ${channelTypeLabel(formState.channel_type)}`"
       :confirm-loading="submitLoading"
       @ok="handleSubmit"
       @cancel="resetForm"
-      :width="520"
+      :width="560"
     >
       <a-form :model="formState" layout="vertical" class="channel-form">
-        <a-form-item label="频道名称" required>
+        <a-form-item label="渠道名称" required>
+          <a-input
+            v-model:value="formState.name"
+            placeholder="如: 飞书客服机器人，用于显示"
+          />
+        </a-form-item>
+        <a-form-item label="渠道标识" :required="!editingChannel">
           <a-input
             v-model:value="formState.slug"
-            placeholder="如: feishu-bot，用于唯一标识此频道"
+            placeholder="如: feishu-bot，用于唯一标识（创建后不可修改）"
             :disabled="!!editingChannel"
           />
         </a-form-item>
@@ -150,15 +156,54 @@
         </div>
         <!-- 飞书凭据 -->
         <template v-if="formState.channel_type === 'feishu'">
-          <a-form-item label="App ID">
-            <a-input v-model:value="formState.credentials.app_id" placeholder="飞书应用 App ID" />
-          </a-form-item>
-          <a-form-item label="App Secret">
-            <a-input-password v-model:value="formState.credentials.app_secret" placeholder="飞书应用 App Secret" />
-          </a-form-item>
-          <a-form-item label="Verification Token">
-            <a-input v-model:value="formState.credentials.verification_token" placeholder="事件订阅 Verification Token（可选）" />
-          </a-form-item>
+          <a-segmented
+            v-if="!editingChannel"
+            v-model:value="feishuConfigMode"
+            :options="feishuConfigModeOptions"
+            class="feishu-mode-segmented"
+          />
+          <!-- 一键扫码创建 -->
+          <div v-if="feishuConfigMode === 'qrcode' && !editingChannel" class="feishu-qrcode-section">
+            <div v-if="feishuRegLoading" class="feishu-qrcode-loading">
+              <a-spin :size="'small'" />
+              <span>正在获取二维码…</span>
+            </div>
+            <div v-else-if="feishuRegError" class="feishu-qrcode-error">
+              <span>{{ feishuRegError }}</span>
+              <a-button type="link" size="small" @click="startFeishuRegistration">重试</a-button>
+            </div>
+            <template v-else-if="feishuRegId">
+              <div class="feishu-qrcode-wrapper">
+                <img :src="feishuQrImgUrl" alt="飞书扫码二维码" class="feishu-qrcode-img" />
+              </div>
+              <p class="feishu-qrcode-hint">
+                <template v-if="feishuRegStatus === 'completed'">
+                  <span class="feishu-reg-success">
+                    <a-spin v-if="submitLoading" :size="'small'" style="margin-right: 6px" />
+                    ✓ 应用创建成功，正在自动创建渠道…
+                  </span>
+                </template>
+                <template v-else>
+                  使用飞书扫描上方二维码，一键创建应用并自动获取凭据
+                </template>
+              </p>
+              <p v-if="feishuRegStatus === 'polling'" class="feishu-qrcode-polling">
+                <a-spin :size="'small'" /> 等待扫码确认…
+              </p>
+            </template>
+          </div>
+          <!-- 手动填写 -->
+          <template v-if="feishuConfigMode === 'manual' || editingChannel">
+            <a-form-item label="App ID">
+              <a-input v-model:value="formState.credentials.app_id" placeholder="飞书应用 App ID" />
+            </a-form-item>
+            <a-form-item label="App Secret">
+              <a-input-password v-model:value="formState.credentials.app_secret" placeholder="飞书应用 App Secret" />
+            </a-form-item>
+            <a-form-item label="Verification Token">
+              <a-input v-model:value="formState.credentials.verification_token" placeholder="事件订阅 Verification Token（可选）" />
+            </a-form-item>
+          </template>
         </template>
         <!-- 钉钉凭据 -->
         <template v-if="formState.channel_type === 'dingtalk'">
@@ -199,7 +244,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { BookOpen, RefreshCw, Trash2 } from '@lucide/vue'
 import ExtensionCardGrid from './ExtensionCardGrid.vue'
@@ -214,8 +259,23 @@ const showCreateModal = ref(false)
 const editingChannel = ref(null)
 const agentOptions = ref([])
 
+// ── 飞书一键扫码注册 ──────────────────────────────────
+const feishuConfigMode = ref('qrcode')
+const feishuConfigModeOptions = [
+  { label: '扫码一键创建', value: 'qrcode' },
+  { label: '手动填写', value: 'manual' }
+]
+const feishuRegId = ref('')
+const feishuRegStatus = ref('') // init | qr_ready | polling | completed | error
+const feishuRegLoading = ref(false)
+const feishuRegError = ref('')
+const feishuQrUrl = ref('')
+const feishuRegExpireIn = ref(0)
+let feishuPollTimer = null
+
 const formState = reactive({
   slug: '',
+  name: '',
   channel_type: 'feishu',
   enabled: true,
   agent_slug: '',
@@ -230,8 +290,8 @@ const CHANNEL_TYPE_META = {
 
 const CHANNEL_SETUP_GUIDES = {
   feishu: {
-    hint: '在飞书开放平台创建企业自建应用，开启机器人能力，获取 App ID 和 App Secret。',
-    url: 'https://open.feishu.cn/document/uQjL24SN/uk0Mz4jL5UDNzQnL5MDN'
+    hint: '推荐使用「扫码一键创建」自动获取凭据；也可手动在飞书开放平台创建应用后填写凭据。',
+    url: 'https://open.feishu.cn/document/mcp_open_tools/integrating-agents-with-feishu/overview'
   },
   dingtalk: {
     hint: '在钉钉开发者后台创建企业内部应用，添加机器人能力，获取 AppKey 和 AppSecret。',
@@ -258,9 +318,108 @@ const fetchAgentOptions = async () => {
   }
 }
 
+/** 智能体 slug → 中文名映射 */
+const agentNameMap = computed(() => {
+  const map = {}
+  for (const opt of agentOptions.value) {
+    map[opt.value] = opt.label
+  }
+  return map
+})
+
+/** 获取渠道卡片描述：优先显示智能体中文名，其次渠道类型 */
+const channelCardDescription = (ch) => {
+  if (ch.agent_slug) {
+    return agentNameMap.value[ch.agent_slug] || ch.agent_slug
+  }
+  return channelTypeLabel(ch.channel_type)
+}
+
 const filterAgentOption = (input, option) => {
   return option.label.toLowerCase().includes(input.toLowerCase())
 }
+
+/** 将飞书二维码 URL 转为可嵌入的 img 地址（使用公共 QR 生成服务）。 */
+const feishuQrImgUrl = computed(() => {
+  if (!feishuQrUrl.value) return ''
+  const data = encodeURIComponent(feishuQrUrl.value)
+  return `https://api.qrserver.com/v1/create-qr-code/?data=${data}&size=200x200&margin=8`
+})
+
+/** 发起飞书一键注册，获取二维码。 */
+const startFeishuRegistration = async () => {
+  feishuRegLoading.value = true
+  feishuRegError.value = ''
+  feishuRegId.value = ''
+  feishuQrUrl.value = ''
+  feishuRegStatus.value = ''
+  stopFeishuPolling()
+  try {
+    const res = await channelApi.startFeishuRegistration()
+    feishuRegId.value = res.registration_id
+    feishuQrUrl.value = res.qr_url || ''
+    feishuRegExpireIn.value = res.expire_in || 600
+    feishuRegStatus.value = res.status || 'qr_ready'
+    if (res.status === 'qr_ready' || res.status === 'polling') {
+      startFeishuPolling()
+    }
+  } catch (e) {
+    feishuRegError.value = e?.response?.data?.detail || '获取二维码失败，请重试'
+  } finally {
+    feishuRegLoading.value = false
+  }
+}
+
+/** 轮询注册状态，直到完成或出错。 */
+const startFeishuPolling = () => {
+  stopFeishuPolling()
+  feishuPollTimer = setInterval(async () => {
+    if (!feishuRegId.value) {
+      stopFeishuPolling()
+      return
+    }
+    try {
+      const res = await channelApi.getFeishuRegistrationStatus(feishuRegId.value)
+      feishuRegStatus.value = res.status
+      if (res.status === 'completed') {
+        stopFeishuPolling()
+        // 自动填入凭据
+        formState.credentials.app_id = res.app_id
+        formState.credentials.app_secret = res.app_secret
+        // 自动生成渠道标识和名称（如果用户还没有填写）
+        if (!formState.slug) {
+          const suffix = (res.app_id || '').replace(/^cli_/, '').slice(0, 8) || Date.now().toString(36)
+          formState.slug = `feishu-${suffix}`
+        }
+        if (!formState.name) {
+          formState.name = `飞书渠道-${(res.app_id || '').replace(/^cli_/, '').slice(0, 6) || suffix}`
+        }
+        message.success('飞书应用创建成功，正在自动创建渠道…')
+        // 自动提交表单，完成一键创建
+        await handleSubmit()
+      } else if (res.status === 'error') {
+        stopFeishuPolling()
+        feishuRegError.value = res.error || '注册失败'
+      }
+    } catch {
+      // 网络错误时继续轮询
+    }
+  }, 2000)
+}
+
+const stopFeishuPolling = () => {
+  if (feishuPollTimer) {
+    clearInterval(feishuPollTimer)
+    feishuPollTimer = null
+  }
+}
+
+/** 切换到飞书扫码模式时自动发起注册。 */
+watch(feishuConfigMode, (mode) => {
+  if (mode === 'qrcode' && !feishuRegId.value && !feishuRegLoading.value) {
+    void startFeishuRegistration()
+  }
+})
 
 const supportedChannelTypes = computed(() => {
   return Object.entries(CHANNEL_TYPE_META).map(([type, meta]) => {
@@ -281,9 +440,9 @@ const fetchChannels = async () => {
   loading.value = true
   try {
     const res = await channelApi.listChannels()
-    channels.value = res.data || []
-  } catch (e) {
-    message.error('加载频道列表失败')
+    channels.value = Array.isArray(res) ? res : (res?.data || [])
+  } catch {
+    message.error('加载渠道列表失败')
   } finally {
     loading.value = false
   }
@@ -296,17 +455,28 @@ const handleAddFromMenu = ({ key }) => {
 const handleAddForType = (type) => {
   editingChannel.value = null
   formState.slug = ''
+  formState.name = ''
   formState.channel_type = type
   formState.enabled = true
   formState.agent_slug = ''
   formState.credentials = {}
+  // 重置飞书一键注册状态
+  resetFeishuRegistration()
   showCreateModal.value = true
   void fetchAgentOptions()
+  // 飞书默认扫码模式，自动发起注册
+  if (type === 'feishu') {
+    feishuConfigMode.value = 'qrcode'
+    void startFeishuRegistration()
+  } else {
+    feishuConfigMode.value = 'qrcode'
+  }
 }
 
 const handleEditChannel = (ch) => {
   editingChannel.value = ch
   formState.slug = ch.slug
+  formState.name = ch.name || ''
   formState.channel_type = ch.channel_type
   formState.enabled = ch.enabled
   formState.agent_slug = ch.agent_slug || ''
@@ -318,22 +488,23 @@ const handleEditChannel = (ch) => {
 const handleDeleteChannel = async (ch) => {
   try {
     await channelApi.deleteChannel(ch.slug)
-    message.success(`频道 ${ch.slug} 已删除`)
+    message.success(`渠道 ${ch.slug} 已删除`)
     await fetchChannels()
-  } catch (e) {
-    message.error('删除频道失败')
+  } catch {
+    message.error('删除渠道失败')
   }
 }
 
 const handleSubmit = async () => {
   if (!formState.slug || !formState.channel_type) {
-    message.warning('请填写频道名称')
+    message.warning('请填写渠道标识')
     return
   }
   submitLoading.value = true
   try {
     const payload = {
       slug: formState.slug,
+      name: formState.name || null,
       channel_type: formState.channel_type,
       enabled: formState.enabled,
       agent_slug: formState.agent_slug || null,
@@ -341,36 +512,54 @@ const handleSubmit = async () => {
     }
     if (editingChannel.value) {
       await channelApi.updateChannel(editingChannel.value.slug, {
+        name: payload.name,
         enabled: payload.enabled,
         credentials: Object.keys(payload.credentials).length ? payload.credentials : undefined,
         agent_slug: payload.agent_slug
       })
-      message.success('频道已更新')
+      message.success('渠道已更新')
     } else {
       await channelApi.createChannel(payload)
-      message.success('频道已创建')
+      message.success('渠道已创建')
     }
     showCreateModal.value = false
     resetForm()
     await fetchChannels()
-  } catch (e) {
-    message.error(editingChannel.value ? '更新频道失败' : '创建频道失败')
+  } catch {
+    message.error(editingChannel.value ? '更新渠道失败' : '创建渠道失败')
   } finally {
     submitLoading.value = false
   }
 }
 
+const resetFeishuRegistration = () => {
+  stopFeishuPolling()
+  feishuRegId.value = ''
+  feishuRegStatus.value = ''
+  feishuRegLoading.value = false
+  feishuRegError.value = ''
+  feishuQrUrl.value = ''
+  feishuRegExpireIn.value = 0
+}
+
 const resetForm = () => {
   editingChannel.value = null
   formState.slug = ''
+  formState.name = ''
   formState.channel_type = 'feishu'
   formState.enabled = true
   formState.agent_slug = ''
   formState.credentials = {}
+  resetFeishuRegistration()
+  feishuConfigMode.value = 'qrcode'
 }
 
 onMounted(() => {
   fetchChannels()
+})
+
+onUnmounted(() => {
+  stopFeishuPolling()
 })
 </script>
 
@@ -589,5 +778,73 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.feishu-mode-segmented {
+  margin-bottom: 16px;
+  width: 100%;
+}
+
+.feishu-qrcode-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 4px;
+}
+
+.feishu-qrcode-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 0;
+  color: var(--gray-500);
+  font-size: 13px;
+}
+
+.feishu-qrcode-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 0;
+  color: var(--color-danger-600, var(--gray-600));
+  font-size: 13px;
+}
+
+.feishu-qrcode-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+  border: 1px solid var(--gray-150);
+  border-radius: 12px;
+  background: var(--gray-0);
+}
+
+.feishu-qrcode-img {
+  width: 200px;
+  height: 200px;
+  display: block;
+}
+
+.feishu-qrcode-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--gray-500);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.feishu-qrcode-polling {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--main-500);
+}
+
+.feishu-reg-success {
+  color: var(--color-success-600);
+  font-weight: 500;
 }
 </style>

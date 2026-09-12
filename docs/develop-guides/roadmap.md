@@ -23,6 +23,7 @@
 - 为子智能体增加 Steer 机制。
 - 增加子智能体向主智能体提问的 `ask_for_main_agent` 能力。
 - 设计子智能体之间的通信机制。
+- **Agent 自进化体系**：对话后自动回顾提取经验、质量守门过滤低质量沉淀、定期整理合并重复经验。详见[决策记录](./decisions/proposed/2026-09-12-agent-self-evolution-system.md)。
 
 ## 其他
 

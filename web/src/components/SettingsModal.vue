@@ -70,8 +70,8 @@
             @click="activeTab = 'design'"
             v-if="userStore.isAdmin"
           >
-            <Palette class="icon" :size="18" />
-            <span>设计</span>
+            <Tags class="icon" :size="18" />
+            <span>分类设置</span>
           </div>
           <div
             class="sider-item"
@@ -167,7 +167,7 @@
           @click="activeTab = 'design'"
           v-if="userStore.isAdmin"
         >
-          设计
+          分类设置
         </div>
         <div
           class="nav-item"
@@ -246,9 +246,9 @@ import {
   CircleUser,
   Settings,
   Key,
-  Palette,
   ScanText,
   SquareTerminal,
+  Tags,
   User,
   Users,
   X

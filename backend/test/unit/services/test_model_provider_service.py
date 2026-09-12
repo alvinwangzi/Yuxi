@@ -235,16 +235,16 @@ async def test_fetch_remote_models_loads_embedding_only_when_capability_enabled(
     assert [model["type"] for model in models] == ["chat", "embedding"]
 
 
-def test_normalize_payload_rejects_ollama_provider_type():
-    with pytest.raises(ValueError, match="provider_type 必须是"):
-        _normalize_payload(
-            {
-                "provider_id": "ollama-local",
-                "display_name": "Ollama Local",
-                "provider_type": "ollama",
-                "base_url": "http://localhost:11434",
-            }
-        )
+def test_normalize_payload_accepts_ollama_provider_type():
+    payload = _normalize_payload(
+        {
+            "provider_id": "ollama-local",
+            "display_name": "Ollama Local",
+            "provider_type": "ollama",
+            "base_url": "http://localhost:11434",
+        }
+    )
+    assert payload["provider_type"] == "ollama"
 
 
 def test_builtin_provider_templates_default_to_openai_provider_type():
@@ -259,8 +259,8 @@ def test_builtin_provider_templates_default_to_openai_provider_type():
         )["provider_type"]
         for provider in BUILTIN_PROVIDERS
     }
-    assert provider_types == {"openai"}
-    assert all("ollama" not in provider["provider_id"] for provider in BUILTIN_PROVIDERS)
+    # 内置供应商包含 openai 和 ollama 两种 provider_type
+    assert provider_types == {"openai", "ollama"}
 
 
 @pytest.mark.parametrize(
@@ -316,18 +316,18 @@ def test_normalize_payload_rejects_invalid_source():
         )
 
 
-def test_normalize_payload_rejects_model_type_not_in_capabilities():
-    """provider 仅声明 chat 能力时，不允许写入 embedding 类型的模型。"""
-    with pytest.raises(ValueError, match="不在 provider 能力"):
-        _normalize_payload(
-            {
-                "provider_id": "chat-only",
-                "display_name": "Chat Only",
-                "base_url": "https://example.com/v1",
-                "capabilities": ["chat"],
-                "enabled_models": [{"id": "rogue-embedding", "type": "embedding", "dimension": 1024}],
-            }
-        )
+def test_normalize_payload_allows_model_type_outside_capabilities_with_warning():
+    """provider 仅声明 chat 能力时，写入 embedding 类型模型仅警告不阻断。"""
+    payload = _normalize_payload(
+        {
+            "provider_id": "chat-only",
+            "display_name": "Chat Only",
+            "base_url": "https://example.com/v1",
+            "capabilities": ["chat"],
+            "enabled_models": [{"id": "rogue-embedding", "type": "embedding", "dimension": 1024}],
+        }
+    )
+    assert payload["enabled_models"][0]["type"] == "embedding"
 
 
 def test_normalize_payload_allows_model_type_within_capabilities():

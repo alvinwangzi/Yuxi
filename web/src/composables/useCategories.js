@@ -21,7 +21,7 @@ export function useCategories(entityType) {
     isLoading.value = true
     try {
       const res = await categoryApi.list(entityType)
-      if (res.code === 0) {
+      if (res.success) {
         categories.value = res.data || []
         cache[entityType] = categories.value
       }
@@ -37,7 +37,7 @@ export function useCategories(entityType) {
   async function createCategory(data) {
     try {
       const res = await categoryApi.create({ ...data, entity_type: entityType })
-      if (res.code === 0) {
+      if (res.success) {
         message.success('分类创建成功')
         await loadCategories(true)
         return res.data
@@ -54,7 +54,7 @@ export function useCategories(entityType) {
   async function updateCategory(id, data) {
     try {
       const res = await categoryApi.update(id, data)
-      if (res.code === 0) {
+      if (res.success) {
         message.success('分类更新成功')
         await loadCategories(true)
         return res.data
@@ -71,7 +71,7 @@ export function useCategories(entityType) {
   async function deleteCategory(id) {
     try {
       const res = await categoryApi.delete(id)
-      if (res.code === 0) {
+      if (res.success) {
         message.success('分类已删除')
         await loadCategories(true)
         return true
@@ -88,7 +88,7 @@ export function useCategories(entityType) {
   async function reorderCategories(items) {
     try {
       const res = await categoryApi.reorder(items)
-      if (res.code === 0) {
+      if (res.success) {
         await loadCategories(true)
         return true
       } else {

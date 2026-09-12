@@ -3,7 +3,7 @@
     v-model:open="open"
     :trigger="['click']"
     placement="topLeft"
-    overlay-class-name="execution-mode-dropdown-overlay"
+    overlay-class-name="config-dropdown-overlay"
   >
     <button
       ref="triggerRef"

@@ -42,9 +42,31 @@ const modelTestLoadingBySpec = ref({})
 const modelTestResultBySpec = ref({})
 
 const PROVIDER_TYPE_OPTIONS = [
-  { value: 'openai', label: 'OpenAI Completions API' },
-  { value: 'anthropic', label: 'Anthropic Messages API' }
+  { value: 'openai', label: 'OpenAI Completions API（含 vLLM / LocalAI / MLX-LM 等）' },
+  { value: 'anthropic', label: 'Anthropic Messages API' },
+  { value: 'ollama', label: 'Ollama（自托管）' }
 ]
+
+// Ollama 等本地服务无需 API Key
+const isLocalProvider = computed(() => providerForm.provider_type === 'ollama')
+
+// Base URL 随 provider_type 变化的提示
+const baseUrlPlaceholder = computed(() => {
+  const hints = {
+    ollama: 'http://localhost:11434',
+    openai: 'https://api.example.com/v1',
+    anthropic: 'https://api.anthropic.com'
+  }
+  return hints[providerForm.provider_type] || 'https://api.example.com/v1'
+})
+
+const baseUrlHint = computed(() => {
+  const hints = {
+    ollama: 'Ollama 原生 API，无需 /v1 后缀。Docker 部署用 host.docker.internal',
+    openai: 'OpenAI 兼容端点，适用于 vLLM / LocalAI / MLX-LM / 云厂商基建等'
+  }
+  return hints[providerForm.provider_type] || ''
+})
 
 const MODALITY_DISPLAY = {
   text: { icon: TextInitial, label: '文本输入' },
@@ -130,6 +152,13 @@ const filteredProviders = computed(() => {
 
 const enabledProviders = computed(() => filteredProviders.value.filter((p) => p.is_enabled))
 const disabledProviders = computed(() => filteredProviders.value.filter((p) => !p.is_enabled))
+
+// 自托管 vs 公网供应商分组
+const SELF_HOSTED_IDS = new Set(['ollama', 'vllm', 'localai'])
+const selfHostedProviders = computed(() => filteredProviders.value.filter((p) => SELF_HOSTED_IDS.has(p.provider_id)))
+const cloudProviders = computed(() => filteredProviders.value.filter((p) => !SELF_HOSTED_IDS.has(p.provider_id)))
+const cloudEnabledProviders = computed(() => cloudProviders.value.filter((p) => p.is_enabled))
+const cloudDisabledProviders = computed(() => cloudProviders.value.filter((p) => !p.is_enabled))
 
 const providerStats = computed(() => {
   let enabled = 0,
@@ -257,20 +286,28 @@ const remoteModelTypeOptions = computed(() => {
     acc[type] = (acc[type] || 0) + 1
     return acc
   }, {})
-  return [
+  const options = [
     { label: `全部 ${models.length}`, value: 'all' },
     { label: `对话 ${counts.chat || 0}`, value: 'chat' },
     { label: `向量 ${counts.embedding || 0}`, value: 'embedding' },
-    { label: `重排 ${counts.rerank || 0}`, value: 'rerank' }
+    { label: `重排 ${counts.rerank || 0}`, value: 'rerank' },
   ]
+  // 仅当存在对应类型模型时显示额外分类
+  if (counts.image) options.push({ label: `图片 ${counts.image}`, value: 'image' })
+  if (counts.audio) options.push({ label: `音频 ${counts.audio}`, value: 'audio' })
+  if (counts.tts) options.push({ label: `语音 ${counts.tts}`, value: 'tts' })
+  if (counts.video) options.push({ label: `视频 ${counts.video}`, value: 'video' })
+  return options
 })
 
-// Model Config Modal 的 type 下拉选项：基于 provider.capabilities 限定
-// 旧数据 capabilities 为空时回退到全集，保持现状
+// Model Config Modal 的 type 下拉选项：始终展示全部类型，让用户自行纠正
+const TYPE_LABELS = {
+  chat: '对话', embedding: '向量', rerank: '重排',
+  image: '图片', audio: '音频', tts: '语音', video: '视频'
+}
+const ALL_MODEL_TYPES = Object.keys(TYPE_LABELS)
 const editingModelTypeOptions = computed(() => {
-  const caps = currentProviderForModels.value?.capabilities
-  const types = Array.isArray(caps) && caps.length ? caps : ['chat', 'embedding', 'rerank']
-  return types.map((c) => ({ value: c, label: c }))
+  return ALL_MODEL_TYPES.map((c) => ({ value: c, label: TYPE_LABELS[c] }))
 })
 
 const parseJsonObject = (text, label) => {
@@ -739,12 +776,13 @@ defineExpose({
     </div>
 
     <template v-else>
-      <div v-if="enabledProviders.length" class="provider-section-header">
-        已启用（{{ enabledProviders.length }}）
+      <!-- 已启用的公网供应商 -->
+      <div v-if="cloudEnabledProviders.length" class="provider-section-header">
+        已启用（{{ cloudEnabledProviders.length }}）
       </div>
-      <ExtensionCardGrid v-if="enabledProviders.length" :min-width="320">
+      <ExtensionCardGrid v-if="cloudEnabledProviders.length" :min-width="320">
         <InfoCard
-          v-for="provider in enabledProviders"
+          v-for="provider in cloudEnabledProviders"
           :key="provider.provider_id"
           :title="provider.display_name"
           :subtitle="provider.provider_id"
@@ -779,12 +817,56 @@ defineExpose({
         </InfoCard>
       </ExtensionCardGrid>
 
-      <div v-if="disabledProviders.length" class="provider-section-header">
-        未启用（{{ disabledProviders.length }}）
+      <!-- 自托管 / 私有化部署 -->
+      <div v-if="selfHostedProviders.length" class="provider-section-header">
+        自托管（{{ selfHostedProviders.length }}）
       </div>
-      <ExtensionCardGrid v-if="disabledProviders.length" :min-width="320">
+      <ExtensionCardGrid v-if="selfHostedProviders.length" :min-width="320">
         <InfoCard
-          v-for="provider in disabledProviders"
+          v-for="provider in selfHostedProviders"
+          :key="provider.provider_id"
+          :title="provider.display_name"
+          :subtitle="provider.provider_id"
+          :default-icon="Globe"
+          :info="getProviderInfo(provider)"
+          :status="getProviderStatus(provider)"
+          :variant="provider.is_enabled ? 'default' : 'mini'"
+          :description="provider.is_enabled ? undefined : provider.provider_id"
+          @click="openEditProviderModal(provider)"
+        >
+          <template #icon>
+            <span
+              class="provider-avatar"
+              role="img"
+              :aria-label="`${provider.display_name} 图标`"
+              :style="{
+                background: getProviderAvatar(provider).background,
+                '--provider-avatar-scale': getProviderAvatar(provider).scale,
+                '--provider-avatar-filter': getProviderAvatar(provider).filter
+              }"
+            >
+              <img :src="getProviderAvatar(provider).icon" alt="" />
+            </span>
+          </template>
+          <template v-if="provider.is_enabled" #footer>
+            <button class="view-models-btn" type="button" @click.stop="openModelsModal(provider)">
+              <Settings2 :size="14" />
+              管理模型
+              <span v-if="provider.enabled_models?.length" class="enabled-count"
+                >（已启用 {{ provider.enabled_models.length }} 个）</span
+              >
+            </button>
+          </template>
+        </InfoCard>
+      </ExtensionCardGrid>
+
+      <!-- 未启用的公网供应商 -->
+      <div v-if="cloudDisabledProviders.length" class="provider-section-header">
+        未启用（{{ cloudDisabledProviders.length }}）
+      </div>
+      <ExtensionCardGrid v-if="cloudDisabledProviders.length" :min-width="320">
+        <InfoCard
+          v-for="provider in cloudDisabledProviders"
           :key="provider.provider_id"
           variant="mini"
           :title="provider.display_name"
@@ -848,6 +930,66 @@ defineExpose({
         </div>
       </template>
       <div class="modal-form" autocomplete="off">
+        <a-collapse expand-icon-position="end" :ghost="true" class="guide-collapse">
+          <a-collapse-panel key="guide" header="📖 自托管部署配置指南">
+            <div class="guide-content">
+              <p class="guide-intro">
+                支持接入各类私有化部署的大模型服务，根据部署方式选择对应的 Provider Type：
+              </p>
+
+              <div class="guide-section">
+                <h5>Ollama（本地 / 服务器部署）</h5>
+                <ul>
+                  <li><b>Provider Type</b>：选择 <code>Ollama（自托管）</code></li>
+                  <li><b>Base URL</b>：<code>http://localhost:11434</code>（本机）或 <code>http://服务器IP:11434</code></li>
+                  <li><b>模型名称</b>：运行 <code>ollama list</code> 查看已部署模型，如 <code>qwen3:32b</code>、<code>gemma4:27b</code></li>
+                  <li><b>Docker 部署</b>：Base URL 需填 <code>http://host.docker.internal:11434</code></li>
+                  <li>保存后手动添加模型，无需 API Key</li>
+                </ul>
+              </div>
+
+              <div class="guide-section">
+                <h5>vLLM / LocalAI / SGLang（GPU 服务器部署）</h5>
+                <ul>
+                  <li><b>Provider Type</b>：选择 <code>OpenAI Completions API</code>（这些框架兼容 OpenAI 协议）</li>
+                  <li><b>Base URL</b>：如 <code>http://gpu-server:8000/v1</code>（vLLM 默认端口 8000）</li>
+                  <li><b>模型名称</b>：启动服务时指定的模型名，可通过 <code>curl http://server:8000/v1/models</code> 查看</li>
+                  <li>Models Endpoint 填 <code>/v1/models</code> 可自动拉取模型列表</li>
+                </ul>
+              </div>
+
+              <div class="guide-section">
+                <h5>MLX-LM（Mac 本地部署）</h5>
+                <ul>
+                  <li><b>Provider Type</b>：选择 <code>OpenAI Completions API</code></li>
+                  <li><b>Base URL</b>：如 <code>http://mac-mini:8080/v1</code>（MLX-LM server 默认端口 8080）</li>
+                  <li><b>模型名称</b>：启动时指定的 Hugging Face 模型名，如 <code>mlx-community/Qwen3-32B-4bit</code></li>
+                </ul>
+              </div>
+
+              <div class="guide-section">
+                <h5>阿里云 PAI-EAS / 云厂商基建</h5>
+                <ul>
+                  <li><b>Provider Type</b>：选择 <code>OpenAI Completions API</code></li>
+                  <li><b>Base URL</b>：从云控制台获取推理服务 Endpoint</li>
+                  <li><b>API Key</b>：按云厂商文档配置（通常为阿里云 AccessKey 或独立 Token）</li>
+                  <li>Models Endpoint 视具体服务而定，留空则手动添加模型</li>
+                </ul>
+              </div>
+
+              <div class="guide-section">
+                <h5>高级：自定义 LangChain 模型类</h5>
+                <ul>
+                  <li>若上述方式无法满足，可在「高级配置 → 扩展配置 JSON」中指定 <code>use_class</code></li>
+                  <li>格式：<code>{"use_class": "package_name:ClassName"}</code></li>
+                  <li>示例：<code>{"use_class": "langchain_ollama:ChatOllama"}</code></li>
+                  <li>系统会动态加载指定的 LangChain 模型类，支持接入任意 LangChain 集成</li>
+                </ul>
+              </div>
+            </div>
+          </a-collapse-panel>
+        </a-collapse>
+
         <div class="form-row">
           <label class="form-label">
             <span>Provider ID</span>
@@ -868,18 +1010,22 @@ defineExpose({
           </label>
         </div>
 
-        <div class="form-row">
+        <div class="form-row form-row-single">
           <label class="form-label">
             <span>Base URL</span>
             <a-input
               v-model:value="providerForm.base_url"
-              placeholder="https://api.example.com/v1"
+              :placeholder="baseUrlPlaceholder"
               autocomplete="off"
             />
+            <div class="form-hint">{{ baseUrlHint }}</div>
           </label>
+        </div>
+
+        <div class="form-row form-row-single">
           <label class="form-label">
             <span>Provider Type</span>
-            <a-select v-model:value="providerForm.provider_type">
+            <a-select v-model:value="providerForm.provider_type" style="width: 100%">
               <a-select-option
                 v-for="option in PROVIDER_TYPE_OPTIONS"
                 :key="option.value"
@@ -891,7 +1037,7 @@ defineExpose({
           </label>
         </div>
 
-        <div class="form-row">
+        <div v-if="!isLocalProvider" class="form-row">
           <label class="form-label">
             <span>API Key Env</span>
             <a-input
@@ -912,11 +1058,15 @@ defineExpose({
           </label>
         </div>
 
-        <div class="form-row">
+        <div v-if="!isLocalProvider" class="form-row">
           <label class="form-label">
             <span>Models Endpoint</span>
             <a-input v-model:value="providerForm.models_endpoint" placeholder="/models" />
           </label>
+        </div>
+
+        <div v-if="isLocalProvider" class="form-tip">
+          本地服务不支持自动拉取模型列表，请在保存后手动添加已部署的模型（如 qwen3:32b）
         </div>
 
         <template v-if="providerForm.capabilities.includes('embedding')">
@@ -960,9 +1110,13 @@ defineExpose({
         <label class="form-label full-width">
           <span>能力</span>
           <a-select v-model:value="providerForm.capabilities" mode="multiple">
-            <a-select-option value="chat">chat</a-select-option>
-            <a-select-option value="embedding">embedding</a-select-option>
-            <a-select-option value="rerank">rerank</a-select-option>
+            <a-select-option value="chat">chat（对话）</a-select-option>
+            <a-select-option value="embedding">embedding（向量化）</a-select-option>
+            <a-select-option value="rerank">rerank（重排序）</a-select-option>
+            <a-select-option value="image">image（图片生成）</a-select-option>
+            <a-select-option value="audio">audio（语音识别）</a-select-option>
+            <a-select-option value="tts">tts（语音合成）</a-select-option>
+            <a-select-option value="video">video（视频生成）</a-select-option>
           </a-select>
         </label>
 
@@ -984,7 +1138,11 @@ defineExpose({
 
             <label class="form-label full-width">
               <span>扩展配置 JSON</span>
-              <a-textarea v-model:value="providerForm.extra_text" :rows="4" placeholder="{}" />
+              <a-textarea v-model:value="providerForm.extra_text" :rows="4" placeholder='{"use_class": "langchain_ollama:ChatOllama"}' />
+              <div class="form-hint">
+                可配置 <code>use_class</code> 指定 LangChain 模型类路径，实现动态加载。
+                例：<code>"use_class": "langchain_ollama:ChatOllama"</code>
+              </div>
             </label>
           </a-collapse-panel>
         </a-collapse>
@@ -1010,6 +1168,7 @@ defineExpose({
             </h4>
             <div class="actions">
               <a-button
+                v-if="currentProviderForModels.provider_type !== 'ollama'"
                 size="small"
                 type="primary"
                 class="lucide-icon-btn"
@@ -1047,7 +1206,7 @@ defineExpose({
                 <span class="model-id">{{ getModelId(model) }}</span>
               </div>
               <span class="col-type">
-                <span class="type-tag" :class="model.type">{{ model.type }}</span>
+                <span class="type-tag" :class="model.type">{{ TYPE_LABELS[model.type] || model.type }}</span>
                 <span
                   v-if="model.source === 'manual'"
                   class="type-tag manual"
@@ -1185,7 +1344,7 @@ defineExpose({
                   </a-tooltip>
                 </template>
                 <span class="type-tag" :class="remoteModel.type || 'chat'">
-                  {{ remoteModel.type || 'chat' }}
+                  {{ TYPE_LABELS[remoteModel.type || 'chat'] || remoteModel.type || 'chat' }}
                 </span>
               </div>
               <span class="remote-context">{{
@@ -1546,6 +1705,26 @@ defineExpose({
     color: var(--color-warning-900);
   }
 
+  &.image {
+    background: #f0e6ff;
+    color: #7c3aed;
+  }
+
+  &.audio {
+    background: #e0f2fe;
+    color: #0369a1;
+  }
+
+  &.tts {
+    background: #fce7f3;
+    color: #be185d;
+  }
+
+  &.video {
+    background: #fef3c7;
+    color: #b45309;
+  }
+
   &.manual {
     background: var(--gray-200);
     color: var(--gray-700);
@@ -1718,6 +1897,10 @@ defineExpose({
   gap: 14px;
 }
 
+.form-row-single {
+  grid-template-columns: 1fr;
+}
+
 .form-label {
   display: flex;
   flex-direction: column;
@@ -1753,6 +1936,30 @@ defineExpose({
   }
 }
 
+.form-tip {
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--blue-50, #f0f5ff);
+  color: var(--gray-600);
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid var(--blue-100, #d6e4ff);
+}
+
+.form-hint {
+  margin-top: 4px;
+  color: var(--gray-500);
+  font-size: 11px;
+  line-height: 1.5;
+
+  code {
+    background: var(--gray-100);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+}
+
 .advanced-collapse {
   :deep(.ant-collapse-content-box) {
     padding-inline: 0;
@@ -1763,6 +1970,63 @@ defineExpose({
 
   :deep(.ant-collapse-header) {
     padding-inline: 0;
+  }
+}
+
+.guide-collapse {
+  margin-bottom: 8px;
+
+  :deep(.ant-collapse-header) {
+    padding-inline: 0 !important;
+    font-size: 13px;
+    color: var(--gray-600);
+  }
+
+  :deep(.ant-collapse-content-box) {
+    padding-inline: 0 !important;
+  }
+}
+
+.guide-content {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--gray-600);
+}
+
+.guide-intro {
+  margin: 0 0 12px;
+  color: var(--gray-700);
+}
+
+.guide-section {
+  margin-bottom: 12px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  h5 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gray-700);
+    margin: 0 0 4px;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  li {
+    margin-bottom: 2px;
+  }
+
+  code {
+    background: var(--gray-100);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--gray-800);
   }
 }
 

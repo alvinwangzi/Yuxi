@@ -183,6 +183,7 @@ async def _startup(app: FastAPI) -> None:
         from yuxi.services.channels.wecom import WeComChannel
         from yuxi.services.channels.base import ChannelConfig
         from yuxi.services.channels.repository import ChannelConfigRepository
+        from yuxi.services.channels.message_handler import ensure_channel_message_handler
         from server.routers.channel_router import get_channel_manager
 
         for _type, _cls in [("feishu", FeishuChannel), ("dingtalk", DingTalkChannel), ("wecom", WeComChannel)]:
@@ -191,8 +192,12 @@ async def _startup(app: FastAPI) -> None:
             except ValueError:
                 pass  # 已注册
 
-        # 从数据库加载已配置的 Channel 并启动已启用的
         manager = get_channel_manager()
+
+        # 注册消息处理器——Channel 收到的消息通过它进入 Agent 主链路
+        await ensure_channel_message_handler(manager)
+
+        # 从数据库加载已配置的 Channel 并启动已启用的
         async with pg_manager.get_async_session_context() as session:
             repo = ChannelConfigRepository(session)
             rows = await repo.list_all()

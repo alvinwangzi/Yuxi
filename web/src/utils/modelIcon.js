@@ -16,6 +16,8 @@ export const modelAvatars = {
   'alibaba-coding-plan-cn': avatar('alibabacloud', '#ff6a00', 0.7),
   anthropic: avatar('anthropic', '#f1f0e8', 0.75, 'none'),
   ark: avatar('volcengine-color', '#fff', 0.75, 'none'),
+  'volcengine-ark': avatar('volcengine-color', '#fff', 0.75, 'none'),
+  'volcengine-ark-coding-plan': avatar('volcengine-color', '#fff', 0.75, 'none'),
   dashscope: avatar('bailian-color', '#fff', 0.75, 'none'),
   deepseek: avatar('deepseek', '#4d6bfe'),
   google: avatar('google-color', '#fff', 0.75, 'none'),
@@ -27,6 +29,9 @@ export const modelAvatars = {
   opencode: avatar('opencode', '#000'),
   'opencode-go': avatar('opencode', '#000'),
   openai: avatar('openai', '#000'),
+  ollama: avatar('ollama', '#000', 0.75, 'none'),
+  vllm: avatar('default', '#1a1a2e', 0.72, 'none'),
+  localai: avatar('default', '#3b82f6', 0.72, 'none'),
   openrouter: avatar(
     'openrouter',
     '#000',

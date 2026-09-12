@@ -32,6 +32,7 @@ dependencies = [
     "langchain-core>=1.6.0",
     "langchain-deepseek>=1.0",
     "langchain-mcp-adapters>=0.1.9",
+    "langchain-ollama>=0.3.0",
     "langchain-openai>=1.0.2",
     "langchain-tavily>=0.2.13",
     "langchain-text-splitters>=1.0",
@@ -79,6 +80,10 @@ dependencies = [
     "mdit-py-plugins>=0.4.0",
     "scikit-learn>=1.3.0",
     "beautifulsoup4>=4.12.0",
+    # IM 频道 WebSocket 长连接 SDK
+    "lark-oapi>=1.4.0",
+    "dingtalk-stream>=0.24.0",
+    "websockets>=13.0",
 ]
 
 [tool.setuptools]

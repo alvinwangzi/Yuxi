@@ -1,4 +1,4 @@
-"""IM 频道集成模块。"""
+"""IM 渠道集成模块。"""
 
 from yuxi.services.channels.base import (
     Channel,

@@ -9,6 +9,8 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yuxi.utils.logging_config import logger
+
 from yuxi.models.providers.builtin import BUILTIN_PROVIDERS
 from yuxi.models.providers.repository import (
     create_model_provider,
@@ -21,9 +23,9 @@ from yuxi.models.providers.repository import (
 )
 from yuxi.storage.postgres.models_business import ModelProvider
 
-VALID_MODEL_TYPES = {"chat", "embedding", "rerank"}
+VALID_MODEL_TYPES = {"chat", "embedding", "rerank", "image", "audio", "tts", "video"}
 VALID_MODEL_SOURCES = {"manual", "remote"}
-VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini", "openrouter"}
+VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini", "openrouter", "ollama"}
 OPENAI_COMPATIBLE_REQUEST_BODY_PROVIDER_TYPES = {"openai", "openrouter"}
 ALLOWED_EXTRA_BODY_FIELDS = {
     "enable_thinking",
@@ -56,7 +58,7 @@ def _normalize_model_item(model: dict[str, Any]) -> dict[str, Any]:
 
     model_type = str(model.get("type") or "unknown").strip()
     if model_type not in VALID_MODEL_TYPES:
-        raise ValueError(f"启用模型 {model_id} 的 type 必须是 chat、embedding 或 rerank")
+        raise ValueError(f"启用模型 {model_id} 的 type 必须是 chat、embedding、rerank、image、audio、tts 或 video")
 
     # source 区分手动添加 vs 远端拉取，用于跳过远端清单存在性的视觉警告。
     source = str(model.get("source") or "remote").strip()
@@ -119,10 +121,16 @@ def _normalize_model_list(models: Any) -> list[dict[str, Any]]:
 
 
 def _validate_models_capabilities(enabled_models: list[dict], capabilities: set[str]) -> None:
-    """校验 enabled_models 中所有模型的 type 都在 provider capabilities 范围内。"""
+    """检查 enabled_models 中模型 type 与 provider capabilities 的匹配情况。
+
+    仅记录警告，不阻断保存——用户比系统更清楚实际使用的模型类型。
+    """
     for model in enabled_models or []:
         if model["type"] not in capabilities:
-            raise ValueError(f"模型 {model['id']} 的 type={model['type']} 不在 provider 能力 {sorted(capabilities)} 内")
+            logger.warning(
+                f"模型 {model['id']} 的 type={model['type']} 不在 provider 能力 "
+                f"{sorted(capabilities)} 内，请确认配置正确"
+            )
 
 
 def _validate_request_body_overrides_scope(
@@ -246,6 +254,23 @@ def _models_url(base_url: str, endpoint: str | None = None) -> str:
     return f"{base}/{endpoint.lstrip('/')}"
 
 
+# 仅匹配高度明确的关键词（rerank/embedding/tts），不会对生图/视频等做推断
+_MODEL_ID_TYPE_PATTERNS: list[tuple[list[str], str]] = [
+    (["rerank", "reranker"], "rerank"),
+    (["-embed", "embedding", "embed-"], "embedding"),
+    (["tts-", "tts-", "-tts", "text-to-speech"], "tts"),
+]
+
+
+def _infer_model_type(model_id: str) -> str | None:
+    """从模型 ID 推断类型，仅匹配高度明确的关键词。"""
+    lower_id = model_id.lower()
+    for patterns, model_type in _MODEL_ID_TYPE_PATTERNS:
+        if any(p in lower_id for p in patterns):
+            return model_type
+    return None
+
+
 def _normalize_remote_model(raw_model: dict[str, Any], model_type: str = "chat") -> dict[str, Any]:
     model_id = str(raw_model.get("id") or "").strip()
     if not model_id:
@@ -255,6 +280,11 @@ def _normalize_remote_model(raw_model: dict[str, Any], model_type: str = "chat")
     top_provider = _normalize_dict(raw_model.get("top_provider"))
     raw_type = raw_model.get("type")
     normalized_type = raw_type if raw_type in VALID_MODEL_TYPES else model_type
+    # /models 端点不区分类型时，对 rerank/embedding/tts 做保守推断
+    if normalized_type == "chat":
+        inferred = _infer_model_type(model_id)
+        if inferred:
+            normalized_type = inferred
     normalized = {
         "id": model_id,
         "object": raw_model.get("object"),
@@ -299,9 +329,17 @@ async def ensure_builtin_model_providers_in_db(db: AsyncSession) -> None:
         provider_id = provider_def["provider_id"]
         existing_provider = existing_ids.get(provider_id)
         if existing_provider:
+            changed = False
+            # 同步内置定义的 display_name，使名称变更在重启后生效
+            builtin_display = provider_def.get("display_name")
+            if builtin_display and existing_provider.display_name != builtin_display:
+                existing_provider.display_name = builtin_display
+                changed = True
             if not existing_provider.enabled_models and provider_def.get("enabled_models"):
                 existing_provider.enabled_models = _normalize_model_list(provider_def["enabled_models"])
                 existing_provider.capabilities = provider_def.get("capabilities") or existing_provider.capabilities
+                changed = True
+            if changed:
                 existing_provider.updated_by = "system"
                 await db.flush()
             continue

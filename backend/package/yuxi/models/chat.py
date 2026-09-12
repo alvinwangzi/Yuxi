@@ -65,6 +65,27 @@ def load_chat_model(fully_specified_name: str | None, *, session_id: str | None 
 
     logger.debug(f"Loading model {fully_specified_name} with provider_type={info.provider_type}")
 
+    # use_class 动态类加载（优先于 provider_type 分发）
+    # 管理员可在供应商 extra_json 中配置 "use_class": "module:ClassName"
+    use_class = info.extra.get("use_class")
+    if use_class:
+        from yuxi.models.providers.resolvers import resolve_chat_model_class
+
+        model_class = resolve_chat_model_class(use_class)
+        return model_class(
+            model=info.model_id,
+            base_url=base_url,
+            **kwargs,
+        )
+
+    if info.provider_type == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=info.model_id,
+            base_url=base_url,
+            **kwargs,
+        )
     if info.provider_type == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

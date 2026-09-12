@@ -40,6 +40,7 @@ class ChannelConfigRepository:
         credentials: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
         agent_slug: str | None = None,
+        name: str | None = None,
         created_by: str | None = None,
     ) -> ChannelConfigDB:
         now = utc_now_naive()
@@ -50,6 +51,7 @@ class ChannelConfigRepository:
             credentials=credentials or {},
             extra=extra or {},
             agent_slug=agent_slug,
+            name=name,
             created_by=created_by,
             updated_by=created_by,
             created_at=now,
@@ -64,12 +66,15 @@ class ChannelConfigRepository:
         self,
         item: ChannelConfigDB,
         *,
+        name: str | None = None,
         enabled: bool | None = None,
         credentials: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
         agent_slug: str | None = None,
         updated_by: str | None = None,
     ) -> ChannelConfigDB:
+        if name is not None:
+            item.name = name
         if enabled is not None:
             item.enabled = enabled
         if credentials is not None:

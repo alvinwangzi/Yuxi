@@ -142,6 +142,14 @@ async function updateProfile(profileData) {
   return apiPut('/api/auth/profile', profileData)
 }
 
+/**
+ * 修改当前用户密码
+ * @param {{ old_password: string, new_password: string }} payload
+ */
+async function changePassword(payload) {
+  return apiPost('/api/auth/change-password', payload)
+}
+
 async function checkUid(uid) {
   return apiSuperAdminGet(`/api/auth/check-uid/${encodeURIComponent(uid)}`)
 }
@@ -175,6 +183,7 @@ export const authApi = {
   uploadAvatar,
   getCurrentUser,
   updateProfile,
+  changePassword,
   checkUid,
   impersonateUser,
   getOIDCConfig,

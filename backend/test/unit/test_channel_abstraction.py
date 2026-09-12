@@ -1,4 +1,4 @@
-"""P1: Channel 抽象层 + 飞书 Channel 单元测试。"""
+"""P1: Channel 抽象层 + WebSocket 长连接 Channel 单元测试。"""
 from __future__ import annotations
 
 import asyncio
@@ -223,12 +223,18 @@ async def test_manager_unknown_channel_type_raises():
         await manager.create_channel(config)
 
 
-# ── 飞书 Channel 测试 ────────────────────────────────────
+def test_registered_channel_types():
+    """已注册的类型列表应包含 dummy。"""
+    types = get_registered_channel_types()
+    assert "dummy" in types
+
+
+# ── 飞书 Channel WebSocket 回调测试 ─────────────────────
 
 
 @pytest.mark.asyncio
-async def test_feishu_channel_challenge():
-    """飞书 URL 验证 challenge 应原样返回。"""
+async def test_feishu_ws_message_text():
+    """飞书 WebSocket 回调应正确解析文本消息。"""
     from yuxi.services.channels.feishu import FeishuChannel
 
     config = ChannelConfig(
@@ -238,41 +244,6 @@ async def test_feishu_channel_challenge():
     )
     channel = FeishuChannel(config)
 
-    result = await channel.handle_webhook_event({"challenge": "test_challenge_123"})
-    assert result == {"challenge": "test_challenge_123"}
-
-
-@pytest.mark.asyncio
-async def test_feishu_channel_duplicate_event_ignored():
-    """重复 event_id 应被去重。"""
-    from yuxi.services.channels.feishu import FeishuChannel
-
-    config = ChannelConfig(
-        slug="feishu-dedup",
-        channel_type="feishu",
-        credentials={"app_id": "test_id", "app_secret": "test_secret"},
-    )
-    channel = FeishuChannel(config)
-
-    event = {
-        "header": {
-            "event_type": "im.message.receive_v1",
-            "event_id": "unique_event_001",
-        },
-        "event": {
-            "message": {
-                "message_type": "text",
-                "chat_id": "chat_123",
-                "message_id": "msg_001",
-                "content": json.dumps({"text": "hello"}),
-            },
-            "sender": {
-                "sender_type": "user",
-                "sender_id": {"open_id": "user_1"},
-            },
-        },
-    }
-
     received = []
 
     async def mock_handler(msg):
@@ -280,82 +251,106 @@ async def test_feishu_channel_duplicate_event_ignored():
 
     channel._on_message = mock_handler
     channel._running = True
+    channel._main_loop = asyncio.get_running_loop()
 
-    # 第一次应处理
-    await channel.handle_webhook_event(event)
+    # 模拟 SDK 传入的数据对象
+    mock_data = MagicMock()
+    event_data = {
+        "message": {
+            "message_type": "text",
+            "chat_id": "chat_123",
+            "message_id": "msg_001",
+            "content": json.dumps({"text": "hello feishu"}),
+        },
+        "sender": {
+            "sender_type": "user",
+            "sender_id": {"open_id": "user_1"},
+        },
+    }
+
+    with patch("lark_oapi.JSON.marshal", return_value=json.dumps(event_data)):
+        channel._on_ws_message(mock_data)
+        # 等待 run_coroutine_threadsafe 完成
+        await asyncio.sleep(0.1)
+
     assert len(received) == 1
-
-    # 第二次应去重
-    result = await channel.handle_webhook_event(event)
-    assert result.get("msg") == "duplicate event"
-    assert len(received) == 1  # 没有新增
+    assert received[0].text == "hello feishu"
+    assert received[0].channel_type == "feishu"
+    assert received[0].sender_id == "user_1"
 
 
 @pytest.mark.asyncio
-async def test_feishu_channel_ignores_app_messages():
-    """机器人自己发的消息应被忽略。"""
+async def test_feishu_ws_message_ignores_app():
+    """飞书机器人自身消息应被忽略。"""
     from yuxi.services.channels.feishu import FeishuChannel
 
     config = ChannelConfig(
-        slug="feishu-app-msg",
+        slug="feishu-app",
         channel_type="feishu",
         credentials={"app_id": "test_id", "app_secret": "test_secret"},
     )
     channel = FeishuChannel(config)
 
     received = []
-
-    async def mock_handler(msg):
-        received.append(msg)
-
-    channel._on_message = mock_handler
+    channel._on_message = lambda msg: received.append(msg)
     channel._running = True
 
-    event = {
-        "header": {
-            "event_type": "im.message.receive_v1",
-            "event_id": "event_app_001",
+    event_data = {
+        "message": {
+            "message_type": "text",
+            "chat_id": "chat_123",
+            "message_id": "msg_app",
+            "content": json.dumps({"text": "bot reply"}),
         },
-        "event": {
-            "message": {
-                "message_type": "text",
-                "chat_id": "chat_123",
-                "message_id": "msg_app",
-                "content": json.dumps({"text": "bot reply"}),
-            },
-            "sender": {
-                "sender_type": "app",
-                "sender_id": {"open_id": "app_id"},
-            },
+        "sender": {
+            "sender_type": "app",
+            "sender_id": {"open_id": "app_id"},
         },
     }
 
-    await channel.handle_webhook_event(event)
-    assert len(received) == 0  # 机器人消息应被忽略
+    mock_data = MagicMock()
+    with patch("lark_oapi.JSON.marshal", return_value=json.dumps(event_data)):
+        channel._on_ws_message(mock_data)
+        await asyncio.sleep(0.1)
 
-
-def test_registered_channel_types():
-    """已注册的类型列表应包含 dummy。"""
-    types = get_registered_channel_types()
-    assert "dummy" in types
-
-
-# ── 钉钉 Channel 测试 ─────────────────────────────────────
+    assert len(received) == 0
 
 
 @pytest.mark.asyncio
-async def test_dingtalk_channel_signature_computation():
-    """钉钉回调签名计算应正确。"""
-    from yuxi.services.channels.dingtalk import DingTalkChannel
+async def test_feishu_ws_message_ignores_non_text():
+    """飞书非文本消息应被忽略。"""
+    from yuxi.services.channels.feishu import FeishuChannel
 
-    sig = DingTalkChannel._compute_signature("1234567890", "test_secret")
-    assert isinstance(sig, str)
-    assert len(sig) > 10  # base64 编码
+    config = ChannelConfig(
+        slug="feishu-non-text",
+        channel_type="feishu",
+        credentials={"app_id": "test_id", "app_secret": "test_secret"},
+    )
+    channel = FeishuChannel(config)
+
+    received = []
+    channel._on_message = lambda msg: received.append(msg)
+    channel._running = True
+
+    event_data = {
+        "message": {"message_type": "image", "chat_id": "chat_123"},
+        "sender": {"sender_type": "user"},
+    }
+
+    mock_data = MagicMock()
+    with patch("lark_oapi.JSON.marshal", return_value=json.dumps(event_data)):
+        channel._on_ws_message(mock_data)
+        await asyncio.sleep(0.1)
+
+    assert len(received) == 0
+
+
+# ── 钉钉 Channel Stream 回调测试 ────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_dingtalk_channel_webhook_message():
-    """钉钉文本消息事件应被正确解析。"""
+async def test_dingtalk_stream_message_text():
+    """钉钉 Stream 回调应正确解析文本消息。"""
     from yuxi.services.channels.dingtalk import DingTalkChannel
 
     config = ChannelConfig(
@@ -373,15 +368,19 @@ async def test_dingtalk_channel_webhook_message():
     channel._on_message = mock_handler
     channel._running = True
 
-    event = {
-        "MsgType": "text",
-        "MsgId": "ding_msg_001",
-        "Content": "hello dingtalk",
-        "From": {"staffId": "user_123"},
-        "conversationId": "conv_456",
-    }
+    # 模拟 dingtalk-stream 的 ChatbotMessage
+    mock_message = MagicMock()
+    mock_message.text = MagicMock()
+    mock_message.text.content = "hello dingtalk"
+    mock_message.sender_staff_id = "user_123"
+    mock_message.sender_id = "sender_123"
+    mock_message.conversation_id = "conv_456"
+    mock_message.msg_id = "ding_msg_001"
 
-    await channel.handle_webhook_event(event)
+    with patch.dict("sys.modules", {"dingtalk_stream": MagicMock()}):
+        result = channel._on_stream_message(mock_message)
+        await asyncio.sleep(0.1)
+
     assert len(received) == 1
     assert received[0].text == "hello dingtalk"
     assert received[0].channel_type == "dingtalk"
@@ -389,43 +388,47 @@ async def test_dingtalk_channel_webhook_message():
 
 
 @pytest.mark.asyncio
-async def test_dingtalk_channel_ignores_non_text():
-    """钉钉非文本消息应被忽略。"""
+async def test_dingtalk_stream_message_empty_text():
+    """钉钉空文本消息应被忽略但仍返回 OK。"""
     from yuxi.services.channels.dingtalk import DingTalkChannel
 
-    config = ChannelConfig(slug="dingtalk-ignore", channel_type="dingtalk", credentials={})
+    config = ChannelConfig(
+        slug="dingtalk-empty",
+        channel_type="dingtalk",
+        credentials={"app_key": "key", "app_secret": "secret"},
+    )
     channel = DingTalkChannel(config)
 
     received = []
     channel._on_message = lambda msg: received.append(msg)
     channel._running = True
 
-    await channel.handle_webhook_event({"MsgType": "image", "MsgId": "img_001"})
+    mock_message = MagicMock()
+    mock_message.text = MagicMock()
+    mock_message.text.content = "   "
+    mock_message.sender_staff_id = "user_123"
+    mock_message.conversation_id = "conv_456"
+    mock_message.msg_id = "ding_msg_002"
+
+    with patch.dict("sys.modules", {"dingtalk_stream": MagicMock()}):
+        result = channel._on_stream_message(mock_message)
+        await asyncio.sleep(0.1)
+
     assert len(received) == 0
 
 
-# ── 企业微信 Channel 测试 ─────────────────────────────────
+# ── 企业微信 Channel WebSocket 消息测试 ─────────────────
 
 
 @pytest.mark.asyncio
-async def test_wecom_channel_signature():
-    """企业微信回调签名应正确计算。"""
-    from yuxi.services.channels.wecom import WeComChannel
-
-    sig = WeComChannel._compute_signature("token123", "1234567890", "nonce_abc", "echostr_xyz")
-    assert isinstance(sig, str)
-    assert len(sig) == 40  # SHA1 hex digest
-
-
-@pytest.mark.asyncio
-async def test_wecom_channel_text_message():
-    """企业微信文本消息应被正确解析。"""
+async def test_wecom_ws_inbound_text_message():
+    """企业微信 WebSocket 文本消息应被正确解析。"""
     from yuxi.services.channels.wecom import WeComChannel
 
     config = ChannelConfig(
         slug="wecom-test",
         channel_type="wecom",
-        credentials={"corp_id": "corp", "corp_secret": "secret", "agent_id": "1000002"},
+        credentials={"bot_id": "bot123", "bot_secret": "secret"},
     )
     channel = WeComChannel(config)
 
@@ -437,45 +440,67 @@ async def test_wecom_channel_text_message():
     channel._on_message = mock_handler
     channel._running = True
 
-    event = {
-        "MsgType": "text",
-        "MsgId": "wecom_msg_001",
-        "Content": "hello wecom",
-        "FromUserName": "user_456",
+    data = {
+        "cmd": "aibot_msg_callback",
+        "body": {
+            "msg_type": "text",
+            "text": {"content": "hello wecom"},
+            "from": {"user_id": "user_456"},
+            "msg_id": "wecom_msg_001",
+            "chat_id": "chat_789",
+        },
     }
 
-    await channel.handle_webhook_event(event)
+    await channel._handle_ws_message(data, None)
     assert len(received) == 1
     assert received[0].text == "hello wecom"
     assert received[0].channel_type == "wecom"
     assert received[0].sender_id == "user_456"
+    assert received[0].channel_chat_id == "chat_789"
 
 
 @pytest.mark.asyncio
-async def test_wecom_channel_echostr():
-    """企业微信 URL 验证应返回 echostr。"""
+async def test_wecom_ws_ignores_non_text():
+    """企业微信非文本消息应被忽略。"""
     from yuxi.services.channels.wecom import WeComChannel
 
-    config = ChannelConfig(slug="wecom-verify", channel_type="wecom", credentials={})
-    channel = WeComChannel(config)
-
-    result = await channel.handle_webhook_event({"echostr": "test_echo_string"})
-    assert result == {"echostr": "test_echo_string"}
-
-
-@pytest.mark.asyncio
-async def test_wecom_channel_duplicate_ignored():
-    """企业微信重复消息应被去重。"""
-    from yuxi.services.channels.wecom import WeComChannel
-
-    config = ChannelConfig(slug="wecom-dedup", channel_type="wecom", credentials={})
+    config = ChannelConfig(
+        slug="wecom-ignore",
+        channel_type="wecom",
+        credentials={"bot_id": "bot123", "bot_secret": "secret"},
+    )
     channel = WeComChannel(config)
 
     received = []
     channel._on_message = lambda msg: received.append(msg)
     channel._running = True
 
-    event = {"MsgType": "text", "MsgId": "dup_001", "Content": "test", "FromUserName": "u1"}
-    await channel.handle_webhook_event(event)
-    await channel.handle_webhook_event(event)
-    assert len(received) == 1
+    data = {
+        "cmd": "aibot_msg_callback",
+        "body": {"msg_type": "image"},
+    }
+
+    await channel._handle_ws_message(data, None)
+    assert len(received) == 0
+
+
+@pytest.mark.asyncio
+async def test_wecom_ws_subscribe_response_error():
+    """企业微信订阅失败应记录错误但不抛异常。"""
+    from yuxi.services.channels.wecom import WeComChannel
+
+    config = ChannelConfig(
+        slug="wecom-sub",
+        channel_type="wecom",
+        credentials={"bot_id": "bot123", "bot_secret": "secret"},
+    )
+    channel = WeComChannel(config)
+    channel._running = True
+
+    data = {
+        "cmd": "aibot_subscribe_response",
+        "body": {"errcode": 40001, "errmsg": "invalid bot_id"},
+    }
+
+    # 不应抛异常
+    await channel._handle_ws_message(data, None)

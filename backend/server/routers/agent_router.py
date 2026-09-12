@@ -50,6 +50,8 @@ class AgentCreate(BaseModel):
     slug: str | None = None
     description: str | None = None
     icon: str | None = None
+    category: str | None = None
+    category_id: int | None = None
     pics: list[str] | None = None
     config_json: dict | None = None
     share_config: dict | None = None
@@ -61,6 +63,8 @@ class AgentUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     icon: str | None = None
+    category: str | None = None
+    category_id: int | None = None
     pics: list[str] | None = None
     config_json: dict | None = None
     share_config: dict | None = None
@@ -180,6 +184,8 @@ async def create_agent(
             backend_id=payload.backend_id,
             description=payload.description,
             icon=payload.icon,
+            category=payload.category,
+            category_id=payload.category_id,
             pics=payload.pics,
             config_json=config_json,
             config_resource_access=config_resource_access,
@@ -225,6 +231,10 @@ async def update_agent(
             item.description = None
         if "icon" in fields_set and payload.icon is None:
             item.icon = None
+        if "category" in fields_set and payload.category is None:
+            item.category = None
+        if "category_id" in fields_set and payload.category_id is None:
+            item.category_id = None
 
         config_json = None
         config_resource_access = None
@@ -242,6 +252,8 @@ async def update_agent(
             name=payload.name,
             description=payload.description,
             icon=payload.icon,
+            category=payload.category,
+            category_id=payload.category_id,
             pics=payload.pics,
             config_json=config_json,
             config_resource_access=config_resource_access,

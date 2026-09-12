@@ -111,6 +111,54 @@
       </div>
       <UserConfigSettingsCard ref="userConfigRef" />
     </div>
+
+    <!-- 修改密码卡片 -->
+    <div class="account-card password-card">
+      <div class="password-header">
+        <div class="section-title">修改密码</div>
+        <p class="section-description">定期修改密码有助于保护账户安全。</p>
+      </div>
+      <form class="password-form" @submit.prevent="handleChangePassword">
+        <div class="password-field">
+          <label class="field-label">当前密码</label>
+          <a-input-password
+            v-model:value="passwordForm.oldPassword"
+            placeholder="请输入当前密码"
+            autocomplete="current-password"
+            :maxlength="50"
+          />
+        </div>
+        <div class="password-field">
+          <label class="field-label">新密码</label>
+          <a-input-password
+            v-model:value="passwordForm.newPassword"
+            :placeholder="`请输入新密码（至少 ${MIN_PASSWORD_LENGTH} 位）`"
+            :minlength="MIN_PASSWORD_LENGTH"
+            :maxlength="50"
+            autocomplete="new-password"
+          />
+        </div>
+        <div class="password-field">
+          <label class="field-label">确认新密码</label>
+          <a-input-password
+            v-model:value="passwordForm.confirmPassword"
+            placeholder="请再次输入新密码"
+            :maxlength="50"
+            autocomplete="new-password"
+          />
+        </div>
+        <div class="password-actions">
+          <a-button
+            type="primary"
+            html-type="submit"
+            :loading="changingPassword"
+            :disabled="!isPasswordFormValid"
+          >
+            修改密码
+          </a-button>
+        </div>
+      </form>
+    </div>
   </div>
 </template>
 
@@ -123,6 +171,8 @@ import { Building2, RefreshCw, ShieldCheck, Upload } from '@lucide/vue'
 import FallbackAvatar from '@/components/common/FallbackAvatar.vue'
 import { useUserStore } from '@/stores/user'
 import { generatePixelAvatar } from '@/utils/pixelAvatar'
+import { authApi } from '@/apis/auth_api'
+import { isPasswordLongEnough, MIN_PASSWORD_LENGTH } from '@/utils/passwordValidation'
 
 const userStore = useUserStore()
 const avatarUploading = ref(false)
@@ -132,6 +182,12 @@ const editingField = ref('')
 const usernameInput = ref(null)
 const phoneInput = ref(null)
 const userConfigRef = ref(null)
+const changingPassword = ref(false)
+const passwordForm = reactive({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 const profileDraft = reactive({
   username: '',
   phone_number: ''
@@ -282,6 +338,46 @@ const handleAvatarChange = async (info) => {
     message.error('头像上传失败：' + (error.message || '请稍后重试'))
   } finally {
     avatarUploading.value = false
+  }
+}
+
+const isPasswordFormValid = computed(() => {
+  return (
+    passwordForm.oldPassword.length > 0 &&
+    isPasswordLongEnough(passwordForm.newPassword) &&
+    passwordForm.newPassword === passwordForm.confirmPassword
+  )
+})
+
+const handleChangePassword = async () => {
+  if (!isPasswordFormValid.value) return
+
+  if (!isPasswordLongEnough(passwordForm.newPassword)) {
+    message.error(`新密码至少需要 ${MIN_PASSWORD_LENGTH} 个字符`)
+    return
+  }
+
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    message.error('两次输入的新密码不一致')
+    return
+  }
+
+  changingPassword.value = true
+  try {
+    await authApi.changePassword({
+      old_password: passwordForm.oldPassword,
+      new_password: passwordForm.newPassword
+    })
+    message.success('密码修改成功')
+    passwordForm.oldPassword = ''
+    passwordForm.newPassword = ''
+    passwordForm.confirmPassword = ''
+  } catch (error) {
+    console.error('修改密码失败:', error)
+    const errMsg = error.response?.data?.detail || error.message || '请稍后重试'
+    message.error('修改失败：' + errMsg)
+  } finally {
+    changingPassword.value = false
   }
 }
 
@@ -463,6 +559,50 @@ watch(() => [userStore.username, userStore.phoneNumber], syncProfileDraft, { imm
 
   .apikey-card {
     padding: 16px;
+  }
+
+  .password-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .password-header {
+    .section-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--gray-850);
+      margin-bottom: 4px;
+    }
+
+    .section-description {
+      font-size: 13px;
+      color: var(--gray-500);
+      margin: 0;
+    }
+  }
+
+  .password-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 360px;
+  }
+
+  .password-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    .field-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--gray-700);
+    }
+  }
+
+  .password-actions {
+    padding-top: 4px;
   }
 }
 

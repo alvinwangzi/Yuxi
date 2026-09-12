@@ -27,6 +27,8 @@ class InboundMessage:
     message_id: str | None = None
     sender_name: str | None = None
     raw_event: dict[str, Any] = field(default_factory=dict)
+    channel_slug: str = ""
+    agent_slug: str = ""
 
     @property
     def stable_message_id(self) -> str:
@@ -54,6 +56,7 @@ class ChannelConfig:
     credentials: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     agent_slug: str | None = None
+    name: str | None = None
 
     def get_credential(self, key: str, default: str | None = None) -> str | None:
         val = self.credentials.get(key, default)
@@ -61,7 +64,7 @@ class ChannelConfig:
 
 
 class Channel(abc.ABC):
-    """IM 频道抽象基类。
+    """IM 渠道抽象基类。
 
     子类必须实现 start/stop/send 三个生命周期方法。
     """

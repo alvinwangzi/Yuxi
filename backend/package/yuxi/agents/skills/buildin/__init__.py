@@ -22,8 +22,8 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
     BuiltinSkillSpec(
         slug="image-gen",
         source_dir=_SKILLS_ROOT / "image-gen",
-        description="在 Agent 沙盒中生成图片并保存到 outputs，默认支持 Qwen-Image，也可接入其它图片生成接口。",
-        version="2026.06.02",
+        description="在 Agent 沙盒中生成图片并保存到 outputs，使用管理员配置的图片生成模型。",
+        version="2026.09.12",
         tool_dependencies=("present_artifacts",),
     ),
     BuiltinSkillSpec(
@@ -162,8 +162,7 @@ BUILTIN_SKILLS: list[BuiltinSkillSpec] = [
         slug="dashi-ppt",
         source_dir=_SKILLS_ROOT / "dashi-ppt",
         description="制作 PPT、演示文稿、幻灯片、汇报材料时使用。基于预置视觉主题组合页面，生成可离线打开、可在浏览器编辑的 HTML 演示，支持导出 PPTX / PDF 文件。",
-        version="2026.09.11",
+        version="0.4.13",
         tool_dependencies=("present_artifacts",),
-        auto_install=False,
     ),
 ]

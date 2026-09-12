@@ -55,10 +55,10 @@ export const workflowApi = {
 // ── 角色模板 ──
 
 export const roleApi = {
-  /** 获取角色列表（支持分页） */
-  list(category = null, offset = 0, limit = 50) {
+  /** 获取角色列表（支持分页，category_id 为分类 ID） */
+  list(categoryId = null, offset = 0, limit = 50) {
     const params = { offset, limit }
-    if (category) params.category = category
+    if (categoryId) params.category_id = categoryId
     return apiGet(`${ROLES_URL}?${buildQuery(params)}`)
   },
 
@@ -84,6 +84,6 @@ export const roleApi = {
 
   /** 更新角色分类 */
   updateCategory(roleKey, categoryId) {
-    return apiAdminPut(`/api/admin/roles/${roleKey}/category`, { category_id: categoryId })
+    return apiAdminPut(`/api/roles/${roleKey}/category`, { category_id: categoryId })
   },
 }

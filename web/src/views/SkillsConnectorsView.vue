@@ -52,7 +52,7 @@ const adminExtensionTabs = computed(() => [
   { key: 'skills', label: '技能' },
   { key: 'tools', label: '工具' },
   { key: 'mcp', label: 'MCP' },
-  { key: 'channels', label: '频道' }
+  { key: 'channels', label: '渠道' }
 ])
 const userExtensionTabs = [{ key: 'skills', label: '技能' }]
 const extensionTabs = computed(() =>

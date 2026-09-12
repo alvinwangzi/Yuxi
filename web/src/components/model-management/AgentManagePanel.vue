@@ -209,17 +209,24 @@ defineExpose({
       </template>
     </PageShoulder>
 
-    <div class="category-tab-bar">
-      <button
-        v-for="cat in categoryTabs"
-        :key="cat.key"
-        type="button"
-        class="tab-item"
-        :class="{ active: selectedCategory === cat.key }"
-        @click="selectedCategory = cat.key"
-      >
-        {{ cat.label }}
-        <span v-if="categoryCounts[cat.key]" class="tab-count">{{ categoryCounts[cat.key] }}</span>
+    <div class="category-bar">
+      <div class="category-scroll">
+        <button
+          v-for="cat in categoryTabs"
+          :key="cat.key"
+          type="button"
+          class="category-tab"
+          :class="{ active: selectedCategory === cat.key }"
+          @click="selectedCategory = cat.key"
+        >
+          {{ cat.label }}
+          <span v-if="categoryCounts[cat.key] !== undefined" class="category-count">
+            {{ categoryCounts[cat.key] }}
+          </span>
+        </button>
+      </div>
+      <button type="button" class="refresh-btn" @click="loadAgents" title="刷新">
+        <RefreshCw :size="14" :class="{ spin: agentLoading }" />
       </button>
     </div>
 
@@ -312,6 +319,95 @@ defineExpose({
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.category-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px var(--page-padding) 0;
+  flex-shrink: 0;
+}
+
+.category-scroll {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.category-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-600);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+  flex-shrink: 0;
+
+  &:hover {
+    color: var(--gray-900);
+    background-color: var(--gray-50);
+  }
+
+  &.active {
+    color: var(--gray-2000);
+    background-color: color-mix(in srgb, var(--gray-800) 6%, var(--gray-0));
+    font-weight: 600;
+  }
+}
+
+.category-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--gray-100);
+  color: var(--gray-500);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--gray-150);
+  border-radius: 6px;
+  background: var(--gray-0);
+  color: var(--gray-500);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+
+  &:hover {
+    background: var(--gray-50);
+    color: var(--gray-700);
+  }
+
+  .spin {
+    animation: spin 1s linear infinite;
+  }
 }
 
 .agent-empty-state {

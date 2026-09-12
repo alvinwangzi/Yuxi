@@ -12,7 +12,9 @@ import {
   PanelLeft,
   PanelLeftOpen,
   MessageCirclePlus,
-  Search
+  Search,
+  Users,
+  Workflow
 } from '@lucide/vue'
 
 import { useConfigStore } from '@/stores/config'
@@ -167,6 +169,22 @@ const mainList = computed(() => {
     activePaths: ['/scheduled-agents'],
     icon: ClipboardList,
     activeIcon: ClipboardList
+  })
+
+  items.push({
+    name: '工作流',
+    path: '/workflows',
+    activePaths: ['/workflows'],
+    icon: Workflow,
+    activeIcon: Workflow
+  })
+
+  items.push({
+    name: '角色模板',
+    path: '/roles',
+    activePaths: ['/roles'],
+    icon: Users,
+    activeIcon: Users
   })
 
   items.push({

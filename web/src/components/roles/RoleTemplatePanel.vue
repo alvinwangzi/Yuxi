@@ -31,8 +31,14 @@ const recategorizeState = reactive({
 })
 
 const currentRole = computed(() =>
-  roles.value.find((r) => `${r.category}/${r.id}` === recategorizeState.roleKey)
+  roles.value.find((r) => r.role_key === recategorizeState.roleKey)
 )
+
+// role_key 形如 "category/role-id"，role-id 可含子目录路径
+const splitRoleKey = (roleKey) => {
+  const idx = roleKey.indexOf('/')
+  return { category: roleKey.slice(0, idx), roleId: roleKey.slice(idx + 1) }
+}
 
 const popupStyle = computed(() => {
   if (!recategorizeState.anchorEl) return {}
@@ -64,7 +70,7 @@ const selectedRole = ref(null)
 const detailLoading = ref(false)
 
 const allCategories = computed(() => [
-  { id: 'all', name: '全部' },
+  { id: 'all', label: '全部' },
   ...categories.value
 ])
 
@@ -72,7 +78,7 @@ const filteredRoles = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase()
   let list = roles.value
   if (selectedCategory.value !== 'all') {
-    list = list.filter((r) => r.category === selectedCategory.value)
+    list = list.filter((r) => r.category_id === selectedCategory.value)
   }
   if (keyword) {
     list = list.filter(
@@ -99,14 +105,19 @@ const renderedContent = computed(() => {
 })
 
 const isRoleImported = (role) => {
-  const key = `${role.category}/${role.id}`
-  return importedRoleIds.value.has(key)
+  return importedRoleIds.value.has(role.role_key)
 }
 
 const loadCategories = async () => {
   try {
     const response = await roleApi.getCategories()
     categories.value = response.data || []
+    // 从分类数据初始化计数（确保所有分类都有默认值，避免并行加载时计数缺失）
+    const counts = {}
+    for (const cat of categories.value) {
+      counts[cat.id] = cat.count ?? 0
+    }
+    categoryCounts.value = { all: totalRoles.value, ...counts }
   } catch (error) {
     message.error(error.message || '加载分类失败')
   }
@@ -134,7 +145,13 @@ const loadRoles = async (append = false) => {
     loadedCount.value = roles.value.length
     // 使用后端返回的分类计数（不受分页影响）
     if (response.category_counts) {
-      categoryCounts.value = { all: totalRoles.value, ...response.category_counts }
+      // 后端只返回有模板的分类计数，需为其余分类补默认值 0
+      const merged = { all: totalRoles.value }
+      for (const cat of categories.value) {
+        merged[cat.id] = 0
+      }
+      Object.assign(merged, response.category_counts)
+      categoryCounts.value = merged
     }
     // 内容不满一屏时自动加载下一页
     checkAutoLoad()
@@ -160,7 +177,8 @@ const openDetail = async (role) => {
   drawerOpen.value = true
   detailLoading.value = true
   try {
-    const response = await roleApi.get(role.category, role.id)
+    const { category, roleId } = splitRoleKey(role.role_key)
+    const response = await roleApi.get(category, roleId)
     selectedRole.value = { ...role, ...response.data }
   } catch {
     // 详情获取失败时保留列表中的基本信息
@@ -177,9 +195,9 @@ const handleImport = (role) => {
     cancelText: '取消',
     async onOk() {
       try {
-        await roleApi.importAsAgent(role.category, role.id)
-        const key = `${role.category}/${role.id}`
-        importedRoleIds.value.add(key)
+        const { category, roleId } = splitRoleKey(role.role_key)
+        await roleApi.importAsAgent(category, roleId)
+        importedRoleIds.value.add(role.role_key)
         message.success('已导入为智能体')
       } catch (error) {
         if (error?.response?.status === 409) {
@@ -194,7 +212,7 @@ const handleImport = (role) => {
 
 const openRecategorize = (role, event) => {
   if (!userStore.isAdmin) return
-  recategorizeState.roleKey = `${role.category}/${role.id}`
+  recategorizeState.roleKey = role.role_key
   recategorizeState.visible = true
   recategorizeState.anchorEl = event.currentTarget
   loadRoleCategories()
@@ -203,7 +221,7 @@ const openRecategorize = (role, event) => {
 const selectCategory = async (categoryId) => {
   try {
     const res = await roleApi.updateCategory(recategorizeState.roleKey, categoryId)
-    if (res.code === 0) {
+    if (res.success) {
       message.success('分类已更新')
       await refresh()
     }
@@ -236,7 +254,8 @@ const handleDelete = (role) => {
     async onOk() {
       deleting.value = true
       try {
-        await roleApi.delete(role.category, role.id)
+        const { category, roleId } = splitRoleKey(role.role_key)
+        await roleApi.delete(category, roleId)
         message.success('已删除')
         drawerOpen.value = false
         refresh()
@@ -324,7 +343,7 @@ defineExpose({ loading })
           :class="{ active: selectedCategory === cat.id }"
           @click="onCategoryChange(cat.id)"
         >
-          {{ cat.name }}
+          {{ cat.label }}
           <span v-if="categoryCounts[cat.id] !== undefined" class="category-count">
             {{ categoryCounts[cat.id] }}
           </span>
@@ -349,7 +368,7 @@ defineExpose({ loading })
     <ExtensionCardGrid :items="filteredRoles" empty-text="暂无匹配的角色模板" :min-width="280">
       <InfoCard
         v-for="role in filteredRoles"
-        :key="`${role.category}/${role.id}`"
+        :key="role.role_key"
         :title="role.name"
         :subtitle="role.category_name"
         :description="role.description"
@@ -445,7 +464,7 @@ defineExpose({ loading })
           :class="{ active: currentRole?.category_id === cat.id }"
           @click="selectCategory(cat.id)"
         >
-          {{ cat.name }}
+          {{ cat.label }}
         </div>
       </div>
     </Teleport>

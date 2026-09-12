@@ -1595,10 +1595,107 @@ async def _worker_shutdown(ctx):
     await pg_manager.close()
 
 
+# ── 工作流执行任务 ──
+
+
+async def process_workflow_run(ctx, run_id: int):
+    """执行队列中的工作流运行任务。"""
+    from yuxi.repositories.workflow_repository import WorkflowRepository
+    from yuxi.storage.postgres.models_business import WorkflowRun
+    from yuxi.workflows.engine import WorkflowEngine
+    from yuxi.services.workflow_service import publish_workflow_event
+
+    async with pg_manager.AsyncSession() as session:
+        repo = WorkflowRepository(session)
+        run = await repo.get_run(run_id)
+
+        if not run:
+            logger.warning(f"工作流运行记录不存在: {run_id}")
+            return
+
+        if run.status in ("completed", "failed", "cancelled"):
+            logger.info(f"工作流已完成，跳过: {run_id}, status={run.status}")
+            return
+
+        # 标记为运行中
+        run.status = "running"
+        run.started_at = utc_now_naive()
+        await repo.update_run(run)
+        await session.commit()
+
+        await publish_workflow_event(run_id, "workflow_started", {"run_id": run_id})
+
+        try:
+            # 获取工作流定义
+            workflow = await repo.get_workflow(run.workflow_id)
+            if not workflow:
+                raise ValueError(f"工作流不存在: {run.workflow_id}")
+
+            # 创建执行引擎（定义与输入变量在 execute 时传入）
+            engine = WorkflowEngine(
+                on_step_start=lambda step_id, step_type: _on_step_start(repo, run_id, step_id, step_type),
+                on_step_done=lambda step_id, output: _on_step_done(repo, run_id, step_id, output),
+                on_step_error=lambda step_id, error: _on_step_error(repo, run_id, step_id, error),
+            )
+
+            # 执行工作流
+            context = await engine.execute(workflow.definition, run.input_variables or {})
+
+            # 标记完成
+            run.status = "completed"
+            run.context = context
+            run.completed_at = utc_now_naive()
+            await repo.update_run(run)
+            await session.commit()
+
+            await publish_workflow_event(run_id, "workflow_completed", {"run_id": run_id})
+            logger.info(f"工作流执行完成: run_id={run_id}")
+
+        except Exception as exc:
+            logger.error(f"工作流执行失败: run_id={run_id}, error={exc}")
+            run.status = "failed"
+            run.error_message = str(exc)[:2000]
+            run.completed_at = utc_now_naive()
+            await repo.update_run(run)
+            await session.commit()
+
+            await publish_workflow_event(run_id, "workflow_failed", {"run_id": run_id, "error": str(exc)})
+
+
+async def _on_step_start(repo: "WorkflowRepository", run_id: int, step_id: str, step_type: str):
+    """步骤开始执行回调。"""
+    step_run = await repo.get_step_run(run_id, step_id)
+    if step_run:
+        step_run.status = "running"
+        step_run.started_at = utc_now_naive()
+        await repo.update_step_run(step_run)
+
+
+async def _on_step_done(repo: "WorkflowRepository", run_id: int, step_id: str, output: dict):
+    """步骤执行完成回调。"""
+    step_run = await repo.get_step_run(run_id, step_id)
+    if step_run:
+        step_run.status = "completed"
+        step_run.output_payload = output
+        step_run.completed_at = utc_now_naive()
+        await repo.update_step_run(step_run)
+
+
+async def _on_step_error(repo: "WorkflowRepository", run_id: int, step_id: str, error: str):
+    """步骤执行错误回调。"""
+    step_run = await repo.get_step_run(run_id, step_id)
+    if step_run:
+        step_run.status = "failed"
+        step_run.error_message = error[:1000]
+        step_run.completed_at = utc_now_naive()
+        await repo.update_step_run(step_run)
+
+
 class WorkerSettings:
     functions = [
         process_agent_run,
         func(process_task, timeout=TASKER_DEFAULT_TIMEOUT_SECONDS + 30),
+        func(process_workflow_run, timeout=3600),  # 工作流执行，默认 1 小时超时
     ]
     max_jobs = worker_max_jobs()
     # 交互请求避免继承 ARQ 默认的 500ms 空闲轮询等待。

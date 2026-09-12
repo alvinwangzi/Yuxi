@@ -400,6 +400,8 @@ class AgentRepository:
         slug: str | None = None,
         description: str | None = None,
         icon: str | None = None,
+        category: str | None = None,
+        category_id: int | None = None,
         pics: list[str] | None = None,
         config_json: dict | None = None,
         config_resource_access: dict[str, Collection[str]] | None = None,
@@ -436,6 +438,8 @@ class AgentRepository:
             name=name.strip() or "未命名智能体",
             description=description,
             icon=icon,
+            category=category,
+            category_id=category_id,
             pics=pics or [],
             config_json=merge_agent_config_json(
                 {"context": {}},
@@ -464,6 +468,8 @@ class AgentRepository:
         name: str | None = None,
         description: str | None = None,
         icon: str | None = None,
+        category: str | None = None,
+        category_id: int | None = None,
         pics: list[str] | None = None,
         config_json: dict | None = None,
         config_resource_access: dict[str, Collection[str]] | None = None,
@@ -480,6 +486,10 @@ class AgentRepository:
             agent.description = description
         if icon is not None:
             agent.icon = icon
+        if category is not None:
+            agent.category = category
+        if category_id is not None:
+            agent.category_id = category_id
         if pics is not None:
             agent.pics = pics
         if config_json is not None:

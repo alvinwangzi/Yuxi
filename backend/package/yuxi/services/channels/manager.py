@@ -81,13 +81,15 @@ class ChannelManager:
         return channel
 
     async def stop_channel(self, slug: str) -> None:
-        """停止指定 Channel。"""
+        """停止指定 Channel 并释放资源。"""
         channel = self._channels.get(slug)
         if channel is None:
             return
-        if not channel.is_running:
-            return
-        await channel.stop()
+        # 无论 is_running 状态如何都执行 stop，确保 http_client、WS 线程等资源被释放
+        try:
+            await channel.stop()
+        except Exception as e:
+            logger.warning(f"停止 Channel '{slug}' 时出错: {e}")
         logger.info(f"Channel '{slug}' ({channel.channel_type}) 已停止")
 
     async def remove_channel(self, slug: str) -> None:
@@ -113,11 +115,20 @@ class ChannelManager:
             except Exception:
                 logger.exception(f"停止 Channel '{slug}' 失败")
 
-    async def send_message(self, slug: str, message: OutboundMessage) -> None:
-        """通过指定 Channel 发送消息。"""
+    async def send_message(self, slug: str, message: OutboundMessage) -> str | None:
+        """通过指定 Channel 发送消息，返回渠道消息 ID（用于后续更新）。"""
         channel = self._channels.get(slug)
         if channel is None:
             raise ChannelSendError(f"Channel '{slug}' 不存在")
         if not channel.is_running:
             raise ChannelSendError(f"Channel '{slug}' 未运行")
-        await channel.send(message)
+        return await channel.send(message)
+
+    async def update_message(self, slug: str, message_id: str, text: str) -> None:
+        """更新已发送的渠道消息内容（用于流式输出）。"""
+        channel = self._channels.get(slug)
+        if channel is None:
+            raise ChannelSendError(f"Channel '{slug}' 不存在")
+        if not hasattr(channel, "update_message"):
+            return
+        await channel.update_message(message_id, text)

@@ -153,6 +153,11 @@ async def main() -> None:
             elif business_version == 9:
                 await pg_manager.ensure_business_schema()
                 await pg_manager.record_schema_version("business", BUSINESS_SCHEMA_VERSION)
+            elif business_version == 10:
+                # v10 初版 seed 存在缺陷（模板未导入、软删除表结构不匹配），
+                # 已应用的 v10 库通过幂等收敛修复；已正确的库重复执行无副作用。
+                async with pg_manager.async_engine.begin() as conn:
+                    await pg_manager.repair_role_template_seed(conn)
 
             if knowledge_version is None:
                 await pg_manager.create_knowledge_tables()

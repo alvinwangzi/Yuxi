@@ -45,12 +45,8 @@ async def get_roles(
     # 过滤已软删除的模板（分页后总数需排除已删除项）
     items = [t.to_dict() for t in templates if t.role_key not in deleted_keys]
 
-    # 各分类的角色数（排除已删除，基于全量数据计算）
-    all_templates, _ = await repo.list_all()
-    category_counts: dict[int, int] = {}
-    for t in all_templates:
-        if t.role_key not in deleted_keys:
-            category_counts[t.category_id] = category_counts.get(t.category_id, 0) + 1
+    # 各分类的角色数（SQL GROUP BY，不受分页限制）
+    category_counts = await repo.get_category_counts()
 
     return {
         "success": True,
@@ -206,7 +202,7 @@ async def delete_role_template(
     return {"success": True}
 
 
-@role_router.put("/{role_key}/category")
+@role_router.put("/{role_key:path}/category")
 async def update_role_category(
     role_key: str,
     body: UpdateCategoryRequest,

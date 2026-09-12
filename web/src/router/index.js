@@ -105,6 +105,38 @@ const router = createRouter({
       ]
     },
     {
+      path: '/workflows',
+      name: 'workflows',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'WorkflowsComp',
+          component: () => import('../views/WorkflowView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: ':id',
+          name: 'WorkflowEditor',
+          component: () => import('../views/WorkflowEditorView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
+      path: '/roles',
+      name: 'roles',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'RolesComp',
+          component: () => import('../views/RolesView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/extensions',
       name: 'extensions',
       component: AppLayout,

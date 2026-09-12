@@ -42,6 +42,7 @@ cache
 .playwright-cli
 .playwright-mcp
 .opencode
+tmp_*.png
 
 
 ### IDE
@@ -79,6 +80,9 @@ docs/vibe
 .cursorrules
 
 /models
+
+# 角色模板临时导入目录
+backend/package/yuxi/agents/roles/roles/
 
 .taskr/
 .workbuddy/

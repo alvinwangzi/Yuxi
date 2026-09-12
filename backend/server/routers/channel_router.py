@@ -48,6 +48,7 @@ except ImportError:
 
 class ChannelConfigCreate(BaseModel):
     slug: str = Field(..., min_length=1, max_length=64, description="Channel 唯一标识")
+    name: str | None = Field(None, max_length=128, description="Channel 显示名称")
     channel_type: str = Field(..., min_length=1, max_length=32, description="Channel 类型（如 feishu）")
     enabled: bool = Field(True, description="是否启用")
     credentials: dict[str, Any] = Field(default_factory=dict, description="凭据配置")
@@ -56,6 +57,7 @@ class ChannelConfigCreate(BaseModel):
 
 
 class ChannelConfigUpdate(BaseModel):
+    name: str | None = None
     enabled: bool | None = None
     credentials: dict[str, Any] | None = None
     extra: dict[str, Any] | None = None
@@ -64,6 +66,7 @@ class ChannelConfigUpdate(BaseModel):
 
 class ChannelConfigResponse(BaseModel):
     slug: str
+    name: str | None = None
     channel_type: str
     enabled: bool
     agent_slug: str | None = None
@@ -83,6 +86,7 @@ def _db_row_to_response(row, manager: ChannelManager) -> ChannelConfigResponse:
     credentials = row.credentials or {}
     return ChannelConfigResponse(
         slug=row.slug,
+        name=row.name,
         channel_type=row.channel_type,
         enabled=row.enabled,
         agent_slug=row.agent_slug,
@@ -101,6 +105,7 @@ def _db_row_to_channel_config(row) -> ChannelConfig:
         credentials=row.credentials or {},
         extra=row.extra or {},
         agent_slug=row.agent_slug,
+        name=row.name,
     )
 
 
@@ -140,6 +145,7 @@ async def create_channel(
 
     row = await repo.create(
         slug=payload.slug,
+        name=payload.name,
         channel_type=payload.channel_type,
         enabled=payload.enabled,
         credentials=payload.credentials,
@@ -154,12 +160,69 @@ async def create_channel(
 
     if config.enabled:
         try:
+            from yuxi.services.channels.message_handler import ensure_channel_message_handler
+            await ensure_channel_message_handler(manager)
             await manager.create_channel(config)
             await manager.start_channel(config.slug)
         except Exception as e:
             logger.warning(f"创建 Channel '{payload.slug}' 后启动失败: {e}")
 
     return _db_row_to_response(row, manager)
+
+
+@channel_router.post("/feishu/register")
+async def start_feishu_registration(
+    _admin=Depends(get_admin_user),
+) -> dict[str, Any]:
+    """发起飞书应用一键注册，返回扫码链接。
+
+    基于 lark_oapi SDK 的 register_app 能力，用户扫码即可自动创建飞书应用。
+    返回 registration_id 用于后续轮询结果。
+    """
+    from yuxi.services.channels.feishu_register import get_feishu_registration_manager
+
+    manager = get_feishu_registration_manager()
+    manager.cleanup_expired()
+    try:
+        reg = await manager.start_registration()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return {
+        "registration_id": reg.id,
+        "qr_url": reg.qr_url,
+        "expire_in": reg.expire_in,
+        "status": reg.status,
+    }
+
+
+@channel_router.get("/feishu/register/{registration_id}")
+async def get_feishu_registration_status(
+    registration_id: str,
+    _admin=Depends(get_admin_user),
+) -> dict[str, Any]:
+    """查询飞书应用注册状态。
+
+    返回 status（init/qr_ready/polling/completed/error）；
+    completed 时额外返回 app_id 和 app_secret。
+    """
+    from yuxi.services.channels.feishu_register import get_feishu_registration_manager
+
+    manager = get_feishu_registration_manager()
+    reg = manager.get_registration(registration_id)
+    if not reg:
+        raise HTTPException(status_code=404, detail="注册记录不存在或已过期")
+
+    result: dict[str, Any] = {
+        "registration_id": reg.id,
+        "status": reg.status,
+    }
+    if reg.status == "completed":
+        result["app_id"] = reg.app_id
+        result["app_secret"] = reg.app_secret
+    elif reg.status == "error":
+        result["error"] = reg.error
+    return result
 
 
 @channel_router.get("/{slug}")
@@ -192,6 +255,7 @@ async def update_channel(
 
     row = await repo.update(
         row,
+        name=payload.name,
         enabled=payload.enabled,
         credentials=payload.credentials,
         extra=payload.extra,
@@ -207,6 +271,8 @@ async def update_channel(
     await manager.remove_channel(slug)
     if config.enabled:
         try:
+            from yuxi.services.channels.message_handler import ensure_channel_message_handler
+            await ensure_channel_message_handler(manager)
             await manager.create_channel(config)
             await manager.start_channel(slug)
         except Exception as e:
@@ -263,21 +329,4 @@ async def test_channel(
         return {"ok": False, "error": str(e)}
 
 
-# ── Webhook 接收端点 ──────────────────────────────────────
 
-
-@channel_router.post("/{slug}/webhook")
-async def receive_webhook(
-    slug: str,
-    event: dict[str, Any],
-) -> dict[str, Any]:
-    """接收 IM 平台事件回调（如飞书事件订阅）。"""
-    manager = get_channel_manager()
-    channel = manager.get_channel(slug)
-    if not channel:
-        raise HTTPException(status_code=404, detail=f"Channel '{slug}' 不存在")
-
-    if not hasattr(channel, "handle_webhook_event"):
-        raise HTTPException(status_code=400, detail="该 Channel 不支持 Webhook")
-
-    return await channel.handle_webhook_event(event)

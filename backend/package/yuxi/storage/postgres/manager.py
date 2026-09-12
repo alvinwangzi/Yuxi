@@ -1485,11 +1485,10 @@ class PostgresManager(metaclass=SingletonMeta):
             """
             CREATE TABLE IF NOT EXISTS role_template_deletions (
                 id SERIAL PRIMARY KEY,
-                category VARCHAR(50) NOT NULL,
-                role_id VARCHAR(200) NOT NULL,
+                role_key VARCHAR(255) NOT NULL,
                 deleted_by VARCHAR(64) NOT NULL,
                 deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                CONSTRAINT uq_role_template_deletions UNIQUE (category, role_id)
+                CONSTRAINT uq_role_template_deletions UNIQUE (role_key)
             )
             """,
         ]
@@ -1551,85 +1550,24 @@ class PostgresManager(metaclass=SingletonMeta):
             result = await conn.execute(text("SELECT COUNT(*) FROM custom_categories"))
             if result.scalar() == 0:
                 # --- Seed initial categories ---
-                # Agent categories (from existing itemCategory.js)
-                agent_categories = [
-                    ("general", "通用"), ("customer_service", "客服"), ("data_analysis", "数据分析"),
-                    ("content_creation", "内容创作"), ("code_assistant", "代码助手"),
-                    ("translation", "翻译"), ("education", "教育"), ("hr", "人力资源"),
-                    ("design", "设计"), ("finance", "财务"), ("legal", "法律"),
-                    ("research", "研究"), ("marketing", "营销"), ("productivity", "效率工具"),
+                # 技能分类保持 9 个通用分类
+                skill_categories = [
+                    ("office", "办公协同"), ("dev", "开发工具"), ("data", "数据分析"),
+                    ("content", "内容创作"), ("info", "信息资讯"), ("business", "商业运营"),
+                    ("enterprise", "企业管理"), ("productivity", "效率工具"), ("other", "其他"),
                 ]
-                for i, (slug, label) in enumerate(agent_categories):
+                for i, (slug, label) in enumerate(skill_categories):
                     await conn.execute(text(
                         "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
-                        "VALUES (:et, :slug, :label, :so, TRUE)"
-                    ), {"et": "agent", "slug": slug, "label": label, "so": i})
+                        "VALUES ('skill', :slug, :label, :so, TRUE)"
+                    ), {"slug": slug, "label": label, "so": i})
 
-                # Skill categories (same as agent categories)
-                for i, (slug, label) in enumerate(agent_categories):
-                    await conn.execute(text(
-                        "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
-                        "VALUES (:et, :slug, :label, :so, TRUE)"
-                    ), {"et": "skill", "slug": slug, "label": label, "so": i})
-
-                # Role template categories (from existing CATEGORY_MAP)
-                role_categories = [
-                    ("general", "通用"), ("customer_service", "客户服务"), ("data_analysis", "数据分析"),
-                    ("content_writing", "内容创作"), ("marketing", "营销"), ("education", "教育培训"),
-                    ("design", "设计"), ("programming", "编程开发"), ("hr", "人力资源"),
-                    ("research", "研究分析"), ("finance", "财务"), ("legal", "法律"),
-                    ("health", "医疗健康"), ("travel", "旅行"), ("translation", "翻译"),
-                    ("social", "社交"), ("gaming", "游戏"), ("life_assistant", "生活助手"),
-                    ("office", "办公"), ("engineering", "工程技术"),
-                ]
-                for i, (slug, label) in enumerate(role_categories):
-                    await conn.execute(text(
-                        "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
-                        "VALUES (:et, :slug, :label, :so, TRUE)"
-                    ), {"et": "role_template", "slug": slug, "label": label, "so": i})
-
-                # --- Seed role templates from file system ---
-                # Read all role template markdown files
-                import os
-                import re
-                roles_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agents", "roles", "roles")
-                if os.path.isdir(roles_dir):
-                    # Build slug -> category_id map
-                    cat_result = await conn.execute(text(
-                        "SELECT id, slug FROM custom_categories WHERE entity_type = 'role_template'"
-                    ))
-                    slug_to_id = {row[1]: row[0] for row in cat_result.fetchall()}
-
-                    for category_dir in sorted(os.listdir(roles_dir)):
-                        cat_path = os.path.join(roles_dir, category_dir)
-                        if not os.path.isdir(cat_path) or category_dir.startswith("_") or category_dir == "examples":
-                            continue
-                        cat_slug = category_dir.replace("-", "_")
-                        cat_id = slug_to_id.get(cat_slug)
-                        if cat_id is None:
-                            continue
-                        for filename in sorted(os.listdir(cat_path)):
-                            if not filename.endswith(".md"):
-                                continue
-                            filepath = os.path.join(cat_path, filename)
-                            role_key = f"{category_dir}/{filename[:-3]}"
-                            name = filename[:-3].replace("-", " ").replace("_", " ").title()
-                            try:
-                                content = open(filepath, "r", encoding="utf-8").read()
-                            except Exception:
-                                content = ""
-                            # Extract description from first non-empty, non-heading line
-                            desc = ""
-                            for line in content.split("\n"):
-                                stripped = line.strip()
-                                if stripped and not stripped.startswith("#"):
-                                    desc = stripped[:200]
-                                    break
-                            await conn.execute(text(
-                                "INSERT INTO role_templates (role_key, category_id, name, description, content, sort_order) "
-                                "VALUES (:rk, :cid, :name, :desc, :content, 0) "
-                                "ON CONFLICT (role_key) DO NOTHING"
-                            ), {"rk": role_key, "cid": cat_id, "name": name, "desc": desc, "content": content})
+            # 修复已有安装中过时的内置分类（幂等）
+            await self.repair_initial_categories(conn)
+            # 角色模板分类与模板按角色目录收敛（目录驱动，幂等）
+            await self.repair_role_template_seed(conn)
+            # 智能体分类与角色模板分类保持一致（幂等）
+            await self.sync_agent_categories_with_role_templates(conn)
 
             # 一次性回填：历史线程按各自最新顶层 Run 视为已读；新建线程由 repository 写入哨兵值，不受本回填影响。
             # 先用轻量 EXISTS 探测是否还有待回填的行，避免每次启动都对 agent_runs 做全表 DISTINCT ON 聚合；
@@ -1664,6 +1602,161 @@ class PostgresManager(metaclass=SingletonMeta):
                     text("UPDATE conversations SET last_viewed_run_id = :marker WHERE last_viewed_run_id IS NULL"),
                     {"marker": UNVIEWED_RUN_MARKER},
                 )
+
+    async def repair_initial_categories(self, conn) -> None:
+        """修复 skill 内置分类：将旧版 14 个分类替换为 9 个通用分类（幂等）。
+
+        - 仅处理 is_builtin=TRUE 的分类，用户自建分类不受影响；
+        - 被实体引用的旧分类不会被删除，仅补齐缺失的新分类；
+        - agent 分类由 sync_agent_categories_with_role_templates() 单独处理。
+        """
+        default_categories = [
+            ("office", "办公协同"), ("dev", "开发工具"), ("data", "数据分析"),
+            ("content", "内容创作"), ("info", "信息资讯"), ("business", "商业运营"),
+            ("enterprise", "企业管理"), ("productivity", "效率工具"), ("other", "其他"),
+        ]
+
+        entity_type = "skill"
+        # 检查是否存在旧版内置分类（以 general 为标志）
+        old_check = await conn.execute(text(
+            "SELECT COUNT(*) FROM custom_categories "
+            "WHERE entity_type = :et AND is_builtin = TRUE AND slug = 'general'"
+        ), {"et": entity_type})
+        if not old_check.scalar():
+            # 没有旧分类，可能已是新版或空表；确保新分类存在
+            for i, (slug, label) in enumerate(default_categories):
+                await conn.execute(text(
+                    "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                    "VALUES (:et, :slug, :label, :so, TRUE) "
+                    "ON CONFLICT (entity_type, slug) DO NOTHING"
+                ), {"et": entity_type, "slug": slug, "label": label, "so": i})
+        else:
+            # 删除未被实体引用的旧版内置分类
+            await conn.execute(text(
+                "DELETE FROM custom_categories "
+                "WHERE entity_type = :et AND is_builtin = TRUE "
+                "  AND id NOT IN ("
+                "    SELECT COALESCE(category_id, -1) FROM skills WHERE category_id IS NOT NULL"
+                "  )"
+            ), {"et": entity_type})
+
+            # 补齐新分类（不覆盖已有同 slug 行）
+            for i, (slug, label) in enumerate(default_categories):
+                await conn.execute(text(
+                    "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                    "VALUES (:et, :slug, :label, :so, TRUE) "
+                    "ON CONFLICT (entity_type, slug) DO NOTHING"
+                ), {"et": entity_type, "slug": slug, "label": label, "so": i})
+
+        logger.info("技能分类修复完成")
+
+    async def repair_role_template_seed(self, conn) -> None:
+        """按角色目录收敛角色模板库（幂等，可重复执行）。
+
+        修复 v10 初版 seed 的三处缺陷：
+        - role_template_deletions 曾以 (category, role_id) 结构创建，与 Repository
+          的 role_key 查询不匹配且从未成功写入过数据，检测到旧结构时直接重建
+          （记录丢失仅使被删角色重新可见，无数据风险）；
+        - 初版 seed 目录路径多一层 storage 且未递归扫描，role_templates 始终为空，
+          为空时按 CATEGORY_MAP 补齐分类并导入全部模板；
+        - 初版误 seed 的分类列表与实际目录不匹配，导入后清理已无模板引用的内置分类。
+        """
+        legacy = await conn.execute(text(
+            "SELECT EXISTS ("
+            "  SELECT 1 FROM information_schema.columns"
+            "  WHERE table_name = 'role_template_deletions' AND column_name = 'category'"
+            ")"
+        ))
+        if legacy.scalar():
+            await conn.execute(text("DROP TABLE role_template_deletions"))
+            await conn.execute(text("""
+                CREATE TABLE role_template_deletions (
+                    id SERIAL PRIMARY KEY,
+                    role_key VARCHAR(255) NOT NULL,
+                    deleted_by VARCHAR(64) NOT NULL,
+                    deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_role_template_deletions UNIQUE (role_key)
+                )
+            """))
+
+        count = await conn.execute(text("SELECT COUNT(*) FROM role_templates"))
+        if count.scalar() != 0:
+            return
+
+        # 延迟导入：迁移模块只在 seed 时需要角色目录，避免常驻依赖
+        from yuxi.agents.roles import CATEGORY_MAP, ROLES_DIR, SKIP_FILES, _parse_role_file
+
+        cat_result = await conn.execute(text(
+            "SELECT id, slug FROM custom_categories WHERE entity_type = 'role_template'"
+        ))
+        slug_to_id = {row[1]: row[0] for row in cat_result.fetchall()}
+
+        for order, (cat_name, cat_label) in enumerate(CATEGORY_MAP.items()):
+            cat_dir = ROLES_DIR / cat_name
+            if not cat_dir.is_dir():
+                continue
+            cat_slug = cat_name.replace("-", "_")
+            cat_id = slug_to_id.get(cat_slug)
+            if cat_id is None:
+                created = await conn.execute(text(
+                    "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                    "VALUES ('role_template', :slug, :label, :so, TRUE) "
+                    "ON CONFLICT (entity_type, slug) DO UPDATE SET label = EXCLUDED.label "
+                    "RETURNING id"
+                ), {"slug": cat_slug, "label": cat_label, "so": order})
+                cat_id = created.scalar_one()
+                slug_to_id[cat_slug] = cat_id
+
+            for role_file in sorted(cat_dir.rglob("*.md")):
+                if role_file.name.startswith("_") or role_file.name in SKIP_FILES:
+                    continue
+                parsed = _parse_role_file(role_file, cat_name, include_content=True)
+                await conn.execute(text(
+                    "INSERT INTO role_templates "
+                    "(role_key, category_id, name, description, icon, color, content, sort_order) "
+                    "VALUES (:rk, :cid, :name, :desc, :icon, :color, :content, 0) "
+                    "ON CONFLICT (role_key) DO NOTHING"
+                ), {
+                    "rk": f"{cat_name}/{parsed['id']}",
+                    "cid": cat_id,
+                    "name": parsed["name"],
+                    "desc": parsed["description"],
+                    "icon": parsed["icon"],
+                    "color": parsed["color"],
+                    "content": parsed["content"],
+                })
+
+        # 清理初版误 seed、已无模板引用的内置分类（用户自建分类不受影响）
+        await conn.execute(text(
+            "DELETE FROM custom_categories "
+            "WHERE entity_type = 'role_template' AND is_builtin = TRUE "
+            "  AND id NOT IN (SELECT DISTINCT category_id FROM role_templates)"
+        ))
+        logger.info("角色模板库 seed 收敛完成")
+
+    async def sync_agent_categories_with_role_templates(self, conn) -> None:
+        """将智能体分类与角色模板分类保持一致（幂等）。
+
+        - 仅补齐缺失的分类并更新标签/排序，不删除任何现有分类；
+        - 用户自建或已添加但暂无智能体的分类均不受影响。
+        """
+        # 获取现有角色模板分类（仅内置）
+        role_cats = await conn.execute(text(
+            "SELECT slug, label, sort_order FROM custom_categories "
+            "WHERE entity_type = 'role_template' AND is_builtin = TRUE "
+            "ORDER BY sort_order"
+        ))
+        role_categories = role_cats.fetchall()
+
+        # 补齐/更新智能体分类（ON CONFLICT 保证幂等）
+        for slug, label, sort_order in role_categories:
+            await conn.execute(text(
+                "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                "VALUES ('agent', :slug, :label, :so, TRUE) "
+                "ON CONFLICT (entity_type, slug) DO UPDATE SET label = EXCLUDED.label, sort_order = EXCLUDED.sort_order"
+            ), {"slug": slug, "label": label, "so": sort_order})
+
+        logger.info("智能体分类已同步为角色模板分类")
 
     @property
     def is_postgresql(self) -> bool:

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import {
   Bot,
@@ -15,6 +15,7 @@ import { userApi } from '@/apis/user_api'
 import AgentRuntimeConfigForm from '@/components/AgentRuntimeConfigForm.vue'
 import ShareConfigForm from '@/components/ShareConfigForm.vue'
 import FallbackAvatar from '@/components/common/FallbackAvatar.vue'
+import { useCategories } from '@/composables/useCategories'
 import { isBuiltinAgent, useAgentStore } from '@/stores/agent'
 import { useUserStore } from '@/stores/user'
 import { generateAgentFaceAvatar } from '@/utils/agentFaceAvatar'
@@ -29,6 +30,7 @@ const emit = defineEmits(['saved'])
 
 const userStore = useUserStore()
 const agentStore = useAgentStore()
+const { categories: apiCategories, loadCategories } = useCategories('agent')
 
 const DEFAULT_AGENT_BACKEND_ID = 'ChatbotAgent'
 const SUB_AGENT_BACKEND_ID = 'SubAgentBackend'
@@ -51,18 +53,28 @@ const agentForm = reactive({
   name: '',
   backend_id: DEFAULT_AGENT_BACKEND_ID,
   description: '',
-  icon: ''
+  icon: '',
+  category_id: null
 })
+
+// 智能体分类选项：使用 API 驱动的分类数据
+const AGENT_CATEGORIES = computed(() =>
+  (apiCategories.value || []).map((cat) => ({
+    value: cat.id,
+    label: cat.label
+  }))
+)
 
 // 基本配置的原始基线，用于在标题栏显示「有修改」状态。slug / backend_id
 // 仅在创建模式可编辑，因此新建时不参与比对。
-const originalAgentForm = ref({ name: '', description: '', icon: '' })
+const originalAgentForm = ref({ name: '', description: '', icon: '', category_id: null })
 const originalShareConfig = ref(null)
 
 const snapshotAgentForm = () => ({
   name: (agentForm.name || '').trim(),
   description: (agentForm.description || '').trim(),
-  icon: (agentForm.icon || '').trim()
+  icon: (agentForm.icon || '').trim(),
+  category_id: agentForm.category_id || null
 })
 
 const cloneShareConfig = (share) => {
@@ -121,7 +133,8 @@ const hasProfileChanges = computed(() => {
   if (
     currentForm.name !== baselineForm.name ||
     currentForm.description !== baselineForm.description ||
-    currentForm.icon !== baselineForm.icon
+    currentForm.icon !== baselineForm.icon ||
+    currentForm.category_id !== baselineForm.category_id
   ) {
     return true
   }
@@ -220,6 +233,7 @@ const resetAgentForm = () => {
     backend_id: getDefaultBackendId(),
     description: '',
     icon: '',
+    category_id: null,
     ...defaults
   })
   agentShareConfig.value = getInitialShareConfig()
@@ -268,7 +282,8 @@ const openEdit = async (agent) => {
     name: detail.name || '',
     backend_id: detail.backend_id || DEFAULT_AGENT_BACKEND_ID,
     description: detail.description || '',
-    icon: detail.icon || ''
+    icon: detail.icon || '',
+    category_id: detail.category_id || null
   })
   agentShareConfig.value = isBuiltinAgent(detail)
     ? {
@@ -327,6 +342,7 @@ const buildAgentPayload = () => {
     name: agentForm.name.trim(),
     description: agentForm.description.trim() || null,
     icon: agentForm.icon.trim() || null,
+    category_id: agentForm.category_id || null,
     share_config: normalizeShareConfigForPayload(),
     is_subagent: isSubAgentBackend(agentForm.backend_id)
   }
@@ -379,6 +395,10 @@ const saveAgent = async () => {
     saving.value = false
   }
 }
+
+onMounted(() => {
+  loadCategories()
+})
 
 defineExpose({
   openCreate,
@@ -522,6 +542,19 @@ defineExpose({
                 :rows="3"
                 placeholder="可选"
               />
+            </label>
+            <label class="form-label full-width">
+              <span>分类</span>
+              <a-select
+                v-model:value="agentForm.category_id"
+                class="agent-category-select"
+                placeholder="选择分类"
+                allow-clear
+              >
+                <a-select-option v-for="cat in AGENT_CATEGORIES" :key="cat.value" :value="cat.value">
+                  {{ cat.label }}
+                </a-select-option>
+              </a-select>
             </label>
           </div>
 
@@ -1033,6 +1066,17 @@ defineExpose({
     border-color: var(--main-300);
     background: var(--gray-0);
     box-shadow: 0 0 0 3px var(--main-50);
+  }
+}
+
+.agent-category-select {
+  width: 100%;
+
+  :deep(.ant-select-selector) {
+    border-color: var(--gray-200) !important;
+    border-radius: 8px !important;
+    background: var(--gray-10) !important;
+    min-height: 36px;
   }
 }
 
