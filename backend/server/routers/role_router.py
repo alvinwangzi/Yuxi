@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
@@ -26,35 +25,6 @@ class UpdateCategoryRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Soft-delete helpers（保持 role_template_deletions 表机制不变）
-# ---------------------------------------------------------------------------
-
-async def _get_deleted_role_keys(db: AsyncSession) -> set[str]:
-    """从数据库查询已被逻辑删除的角色模板 role_key 集合。"""
-    try:
-        result = await db.execute(text("SELECT role_key FROM role_template_deletions"))
-        return {row[0] for row in result.fetchall()}
-    except Exception:
-        # 表可能尚未创建（首次启动迁移前），降级为不过滤
-        return set()
-
-
-async def _is_role_deleted(db: AsyncSession, role_key: str) -> bool:
-    deleted = await _get_deleted_role_keys(db)
-    return role_key in deleted
-
-
-async def _mark_role_deleted(db: AsyncSession, role_key: str, deleted_by: str) -> None:
-    await db.execute(
-        text(
-            "INSERT INTO role_template_deletions (role_key, deleted_by) "
-            "VALUES (:role_key, :deleted_by)"
-        ),
-        {"role_key": role_key, "deleted_by": deleted_by},
-    )
-
-
-# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -67,9 +37,9 @@ async def get_roles(
     db: AsyncSession = Depends(get_db),
 ):
     """获取角色模板列表（支持分页，可选分类过滤）。"""
-    deleted_keys = await _get_deleted_role_keys(db)
-
     repo = RoleTemplateRepository(db)
+    deleted_keys = await repo.get_deleted_role_keys()
+
     templates, total = await repo.list_all(category_id=category_id, offset=offset, limit=limit)
 
     # 过滤已软删除的模板（分页后总数需排除已删除项）
@@ -132,10 +102,10 @@ async def get_role_detail(
     """获取角色模板详情。"""
     role_key = f"{category}/{role_id}"
 
-    if await _is_role_deleted(db, role_key):
+    repo = RoleTemplateRepository(db)
+    if await repo.is_role_deleted(role_key):
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    repo = RoleTemplateRepository(db)
     template = await repo.get_by_role_key(role_key)
     if not template:
         raise HTTPException(status_code=404, detail="角色不存在")
@@ -160,10 +130,10 @@ async def import_role_as_agent(
     """
     role_key = f"{category}/{role_id}"
 
-    if await _is_role_deleted(db, role_key):
+    repo = RoleTemplateRepository(db)
+    if await repo.is_role_deleted(role_key):
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    repo = RoleTemplateRepository(db)
     template = await repo.get_by_role_key(role_key)
     if not template:
         raise HTTPException(status_code=404, detail="角色不存在")
@@ -225,10 +195,10 @@ async def delete_role_template(
         raise HTTPException(status_code=404, detail="角色不存在")
 
     # 检查是否已被删除
-    if await _is_role_deleted(db, role_key):
+    if await repo.is_role_deleted(role_key):
         raise HTTPException(status_code=409, detail="该角色已被删除")
 
-    await _mark_role_deleted(db, role_key, user.uid)
+    await repo.mark_role_deleted(role_key, user.uid)
     await db.commit()
 
     logger.info(f"已逻辑删除角色模板: {role_key} (by admin {user.uid})")

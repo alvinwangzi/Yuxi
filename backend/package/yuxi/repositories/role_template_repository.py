@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -87,3 +87,28 @@ class RoleTemplateRepository:
             count += 1
         await self.db.flush()
         return count
+
+    # ------------------------------------------------------------------
+    # Soft-delete helpers（role_template_deletions 表）
+    # ------------------------------------------------------------------
+
+    async def get_deleted_role_keys(self) -> set[str]:
+        """查询已被逻辑删除的角色模板 role_key 集合。"""
+        try:
+            result = await self.db.execute(text("SELECT role_key FROM role_template_deletions"))
+            return {row[0] for row in result.fetchall()}
+        except Exception:
+            return set()
+
+    async def is_role_deleted(self, role_key: str) -> bool:
+        deleted = await self.get_deleted_role_keys()
+        return role_key in deleted
+
+    async def mark_role_deleted(self, role_key: str, deleted_by: str) -> None:
+        await self.db.execute(
+            text(
+                "INSERT INTO role_template_deletions (role_key, deleted_by) "
+                "VALUES (:role_key, :deleted_by)"
+            ),
+            {"role_key": role_key, "deleted_by": deleted_by},
+        )
