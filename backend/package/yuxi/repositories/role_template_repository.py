@@ -44,6 +44,16 @@ class RoleTemplateRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_role_key(self, role_key: str) -> RoleTemplate | None:
+        """按业务唯一标识 role_key 查询角色模板。"""
+        stmt = (
+            select(RoleTemplate)
+            .options(selectinload(RoleTemplate.category))
+            .where(RoleTemplate.role_key == role_key)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update_category(self, template_id: int, category_id: int) -> RoleTemplate | None:
         template = await self.get_by_id(template_id)
         if not template:
