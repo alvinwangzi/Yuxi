@@ -304,6 +304,7 @@ class Agent(Base):
     description = Column(Text, nullable=True)
     icon = Column(String(255), nullable=True)
     category = Column(String(50), nullable=True, index=True, comment="智能体分类：office/dev/data/content/info/business/enterprise/productivity/other")
+    category_id = Column(Integer, ForeignKey("custom_categories.id"), nullable=True, index=True, comment="分类外键")
 
     pics = Column(JSON, nullable=False, default=list)
     config_json = Column(JSON, nullable=False, default=dict)
@@ -337,6 +338,7 @@ class Agent(Base):
             "description": self.description,
             "icon": normalize_public_minio_url(self.icon),
             "category": self.category,
+            "category_id": self.category_id,
             "pics": [normalize_public_minio_url(pic) for pic in (self.pics or [])],
             "config_json": self.config_json or {},
             "share_config": self.share_config or {},
@@ -369,6 +371,7 @@ class Skill(Base):
     content_hash = Column(String(128), nullable=True, comment="技能目录内容哈希（内置 skill 安装时计算）")
     share_config = Column(JSON_VALUE, nullable=False, comment="共享权限配置")
     enabled = Column(Boolean, nullable=False, default=True, comment="是否启用")
+    category_id = Column(Integer, ForeignKey("custom_categories.id"), nullable=True, index=True, comment="分类外键")
     created_by = Column(String(64), nullable=True)
     updated_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
@@ -389,6 +392,7 @@ class Skill(Base):
             "content_hash": self.content_hash,
             "share_config": self.share_config or {},
             "enabled": bool(self.enabled),
+            "category_id": self.category_id,
             "created_by": self.created_by,
             "updated_by": self.updated_by,
             "created_at": format_utc_datetime(self.created_at),

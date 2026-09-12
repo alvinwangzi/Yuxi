@@ -59,15 +59,15 @@
 
     <div class="category-tab-bar">
       <button
-        v-for="key in CATEGORIES"
-        :key="key"
+        v-for="cat in categoryTabs"
+        :key="cat.key"
         type="button"
         class="tab-item"
-        :class="{ active: selectedCategory === key }"
-        @click="selectedCategory = key"
+        :class="{ active: selectedCategory === cat.key }"
+        @click="selectedCategory = cat.key"
       >
-        {{ CATEGORY_LABELS[key] }}
-        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
+        {{ cat.label }}
+        <span v-if="categoryCounts[cat.key]" class="tab-count">{{ categoryCounts[cat.key] }}</span>
       </button>
     </div>
 
@@ -138,15 +138,18 @@
                     v-if="skill.sourceScope !== 'personal'"
                     type="button"
                     class="skill-enabled-action"
-                    :class="{ enabled: skill.enabled !== false }"
+                    :class="{ enabled: skill.enabled !== false, loading: isSkillToggling(skill.slug) }"
                     :disabled="!canManageSkill(skill) || isSkillToggling(skill.slug)"
                     :aria-label="skill.enabled === false ? '启用 Skill' : '禁用 Skill'"
                     @click.stop="handleToggleSkillEnabled(skill)"
                   >
-                    <Plus v-if="skill.enabled === false" :size="15" class="action-icon" />
+                    <Loader2 v-if="isSkillToggling(skill.slug)" :size="15" class="action-icon action-icon-spinner" />
                     <template v-else>
-                      <Check :size="15" class="action-icon action-icon-check" />
-                      <Minus :size="15" class="action-icon action-icon-minus" />
+                      <Plus v-if="skill.enabled === false" :size="15" class="action-icon" />
+                      <template v-else>
+                        <Check :size="15" class="action-icon action-icon-check" />
+                        <Minus :size="15" class="action-icon action-icon-minus" />
+                      </template>
                     </template>
                   </button>
                 </template>
@@ -525,7 +528,8 @@ import {
   Trash2,
   Check,
   Plus,
-  Minus
+  Minus,
+  Loader2
 } from '@lucide/vue'
 import { skillApi } from '@/apis/skill_api'
 import ExtensionCardGrid from './ExtensionCardGrid.vue'
@@ -537,7 +541,8 @@ import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { formatExtensionCardTitle } from '@/utils/extensionDisplayName'
 import { getShareConfigLabel } from '@/utils/shareConfig'
 import { getSkillIcon } from '@/utils/skill_icon_utils'
-import { CATEGORIES, CATEGORY_LABELS, inferSkillCategory } from '@/utils/itemCategory'
+import { inferSkillCategory } from '@/utils/itemCategory'
+import { useCategories } from '@/composables/useCategories'
 
 const RECOMMENDED_SUITES = [
   {
@@ -615,6 +620,38 @@ const togglingSkillSlugs = ref([])
 
 const skills = ref([])
 const skillPreviewVisible = ref(false)
+
+const { categories: apiCategories, loadCategories } = useCategories('skill')
+
+/** 按 slug 快速查找 API 分类 */
+const categoryBySlug = computed(() => {
+  const map = {}
+  for (const cat of apiCategories.value) {
+    map[cat.slug] = cat
+  }
+  return map
+})
+
+/** 优先使用 category_id（数据库分类），其次按旧字段推断后匹配 API 分类。 */
+const resolveSkillCategoryId = (skill) => {
+  if (skill.category_id) return skill.category_id
+  const inferredKey = inferSkillCategory({
+    slug: skill.slug || '',
+    name: skill.name || '',
+    tool_dependencies: skill.tool_dependencies || [],
+    mcp_dependencies: skill.mcp_dependencies || []
+  })
+  if (inferredKey !== 'other' && categoryBySlug.value[inferredKey]) {
+    return categoryBySlug.value[inferredKey].id
+  }
+  return null
+}
+
+/** 分类标签栏：全部 + API 返回的分类列表 */
+const categoryTabs = computed(() => [
+  { key: 'all', label: '全部' },
+  ...apiCategories.value.map((cat) => ({ key: cat.id, label: cat.label }))
+])
 const previewSkill = ref(null)
 const skillPreviewMarkdown = ref('')
 const skillPreviewLoading = ref(false)
@@ -674,12 +711,7 @@ const installedSkillCards = computed(() =>
     ...skill,
     sourceType: skill.source_type || 'upload',
     sourceScope: skill.source_scope,
-    category: inferSkillCategory({
-      slug: skill.slug || '',
-      name: skill.name || '',
-      tool_dependencies: skill.tool_dependencies || [],
-      mcp_dependencies: skill.mcp_dependencies || []
-    })
+    resolvedCategoryId: resolveSkillCategoryId(skill)
   }))
 )
 
@@ -702,15 +734,14 @@ const recommendedSuiteCards = computed(() =>
 const filteredInstalledSkills = computed(() => {
   let result = installedSkillCards.value
   if (selectedCategory.value !== 'all') {
-    result = result.filter((skill) => skill.category === selectedCategory.value)
+    result = result.filter((skill) => skill.resolvedCategoryId === selectedCategory.value)
   }
   return result.filter(matchesSearch)
 })
 const categoryCounts = computed(() => {
   const counts = { all: installedSkillCards.value.length }
-  for (const key of CATEGORIES) {
-    if (key === 'all') continue
-    counts[key] = installedSkillCards.value.filter((s) => s.category === key).length
+  for (const cat of apiCategories.value) {
+    counts[cat.id] = installedSkillCards.value.filter((s) => s.resolvedCategoryId === cat.id).length
   }
   return counts
 })
@@ -1278,6 +1309,7 @@ watch(activeTab, () => {
 
 onMounted(() => {
   fetchSkills()
+  loadCategories()
   loadHistory()
 })
 
@@ -1456,6 +1488,19 @@ defineExpose({
 
 .action-icon {
   flex-shrink: 0;
+}
+
+.action-icon-spinner {
+  animation: skill-toggle-spin 0.8s linear infinite;
+}
+
+@keyframes skill-toggle-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .skill-preview-panel {

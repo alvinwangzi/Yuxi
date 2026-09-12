@@ -14,7 +14,8 @@ import ExtensionCardGrid from '@/components/extensions/ExtensionCardGrid.vue'
 import { normalizeAgent, normalizeAgentBackendOption } from '@/utils/agentConfigUtils'
 import { generateAgentFaceAvatar } from '@/utils/agentFaceAvatar'
 import { getShareConfigLabel } from '@/utils/shareConfig'
-import { CATEGORIES, CATEGORY_LABELS, inferAgentCategory } from '@/utils/itemCategory'
+import { inferAgentCategory } from '@/utils/itemCategory'
+import { useCategories } from '@/composables/useCategories'
 
 const agentStore = useAgentStore()
 const router = useRouter()
@@ -26,11 +27,35 @@ const agentBackendOptions = ref([])
 const managedAgents = ref([])
 const agentEditModalRef = ref(null)
 
+const { categories: apiCategories, loadCategories } = useCategories('agent')
+
+/** 按 slug 快速查找 API 分类 */
+const categoryBySlug = computed(() => {
+  const map = {}
+  for (const cat of apiCategories.value) {
+    map[cat.slug] = cat
+  }
+  return map
+})
+
+/** 优先使用 category_id（数据库分类），其次按旧 category 字段匹配，最后按名称/描述推断。 */
+const resolveAgentCategoryId = (agent) => {
+  if (agent.category_id) return agent.category_id
+  if (agent.category && categoryBySlug.value[agent.category]) {
+    return categoryBySlug.value[agent.category].id
+  }
+  const inferredKey = inferAgentCategory({ name: agent.name || '', description: agent.description || '' })
+  if (inferredKey !== 'other' && categoryBySlug.value[inferredKey]) {
+    return categoryBySlug.value[inferredKey].id
+  }
+  return null
+}
+
 const filteredAgents = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase()
   const list = (managedAgents.value || []).map((agent) => ({
     ...agent,
-    category: inferAgentCategory({ name: agent.name || '', description: agent.description || '' })
+    resolvedCategoryId: resolveAgentCategoryId(agent)
   }))
   const filtered = keyword
     ? list.filter(
@@ -48,7 +73,7 @@ const filteredAgents = computed(() => {
     : list
   let categoryFiltered = filtered
   if (selectedCategory.value !== 'all') {
-    categoryFiltered = filtered.filter((agent) => agent.category === selectedCategory.value)
+    categoryFiltered = filtered.filter((agent) => agent.resolvedCategoryId === selectedCategory.value)
   }
   return [...categoryFiltered].sort((a, b) => {
     if (isBuiltinAgent(a) !== isBuiltinAgent(b)) return isBuiltinAgent(a) ? -1 : 1
@@ -58,15 +83,20 @@ const filteredAgents = computed(() => {
 const categoryCounts = computed(() => {
   const allAgents = (managedAgents.value || []).map((agent) => ({
     ...agent,
-    category: inferAgentCategory({ name: agent.name || '', description: agent.description || '' })
+    resolvedCategoryId: resolveAgentCategoryId(agent)
   }))
   const counts = { all: allAgents.length }
-  for (const key of CATEGORIES) {
-    if (key === 'all') continue
-    counts[key] = allAgents.filter((a) => a.category === key).length
+  for (const cat of apiCategories.value) {
+    counts[cat.id] = allAgents.filter((a) => a.resolvedCategoryId === cat.id).length
   }
   return counts
 })
+
+/** 分类标签栏：全部 + API 返回的分类列表 */
+const categoryTabs = computed(() => [
+  { key: 'all', label: '全部' },
+  ...apiCategories.value.map((cat) => ({ key: cat.id, label: cat.label }))
+])
 
 const groupedAgents = computed(() => {
   const agents = filteredAgents.value.filter((agent) => !agent.is_subagent)
@@ -155,7 +185,7 @@ const deleteAgent = async (agent) => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadAgentBackends(), loadAgents()])
+  await Promise.all([loadAgentBackends(), loadAgents(), loadCategories()])
 })
 
 defineExpose({
@@ -181,15 +211,15 @@ defineExpose({
 
     <div class="category-tab-bar">
       <button
-        v-for="key in CATEGORIES"
-        :key="key"
+        v-for="cat in categoryTabs"
+        :key="cat.key"
         type="button"
         class="tab-item"
-        :class="{ active: selectedCategory === key }"
-        @click="selectedCategory = key"
+        :class="{ active: selectedCategory === cat.key }"
+        @click="selectedCategory = cat.key"
       >
-        {{ CATEGORY_LABELS[key] }}
-        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
+        {{ cat.label }}
+        <span v-if="categoryCounts[cat.key]" class="tab-count">{{ categoryCounts[cat.key] }}</span>
       </button>
     </div>
 
