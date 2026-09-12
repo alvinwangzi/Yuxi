@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 8
+BUSINESS_SCHEMA_VERSION = 10
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -944,6 +944,7 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE IF EXISTS conversations ADD COLUMN IF NOT EXISTS last_viewed_run_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS mcp_servers ADD COLUMN IF NOT EXISTS env JSONB",
+            "ALTER TABLE IF EXISTS channel_configs ADD COLUMN IF NOT EXISTS name VARCHAR(128)",
             *AGENT_RUN_CURSOR_SCHEMA_STATEMENTS,
             """
             CREATE TABLE IF NOT EXISTS agent_envs (
@@ -1422,6 +1423,75 @@ class PostgresManager(metaclass=SingletonMeta):
             """,
             "CREATE INDEX IF NOT EXISTS ix_agent_run_requests_dispatched_run_id ON agent_run_requests(dispatched_run_id)",  # noqa: E501
             *TASK_DURABLE_SCHEMA_STATEMENTS,
+            # ── 工作流引擎表 ──
+            """
+            CREATE TABLE IF NOT EXISTS workflows (
+                id SERIAL PRIMARY KEY,
+                slug VARCHAR(80) NOT NULL UNIQUE,
+                name VARCHAR(200) NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                icon VARCHAR(50) NOT NULL DEFAULT 'workflow',
+                category VARCHAR(50),
+                definition JSONB NOT NULL DEFAULT '{}'::jsonb,
+                default_model_spec JSONB,
+                created_by VARCHAR(64),
+                updated_by VARCHAR(64),
+                is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_workflows_slug ON workflows(slug)",
+            "CREATE INDEX IF NOT EXISTS ix_workflows_category ON workflows(category)",
+            "CREATE INDEX IF NOT EXISTS ix_workflows_created_by ON workflows(created_by)",
+            """
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                id SERIAL PRIMARY KEY,
+                workflow_id INTEGER NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                trigger VARCHAR(20) NOT NULL DEFAULT 'manual',
+                input_variables JSONB NOT NULL DEFAULT '{}'::jsonb,
+                context JSONB NOT NULL DEFAULT '{}'::jsonb,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                total_tokens JSONB NOT NULL DEFAULT '{}'::jsonb,
+                error_message TEXT,
+                created_by VARCHAR(64),
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_workflow_runs_workflow_id ON workflow_runs(workflow_id)",
+            "CREATE INDEX IF NOT EXISTS ix_workflow_runs_status ON workflow_runs(status)",
+            "CREATE INDEX IF NOT EXISTS ix_workflow_runs_created_by ON workflow_runs(created_by)",
+            """
+            CREATE TABLE IF NOT EXISTS workflow_step_runs (
+                id SERIAL PRIMARY KEY,
+                workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                step_id VARCHAR(100) NOT NULL,
+                step_type VARCHAR(20) NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                input_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                output_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                error_message TEXT,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                tokens JSONB NOT NULL DEFAULT '{}'::jsonb,
+                execution_layer INTEGER,
+                loop_iteration INTEGER NOT NULL DEFAULT 0
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_workflow_step_runs_run_id ON workflow_step_runs(workflow_run_id)",
+            "CREATE INDEX IF NOT EXISTS ix_workflow_step_runs_step_id ON workflow_step_runs(workflow_run_id, step_id)",
+            """
+            CREATE TABLE IF NOT EXISTS role_template_deletions (
+                id SERIAL PRIMARY KEY,
+                category VARCHAR(50) NOT NULL,
+                role_id VARCHAR(200) NOT NULL,
+                deleted_by VARCHAR(64) NOT NULL,
+                deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_role_template_deletions UNIQUE (category, role_id)
+            )
+            """,
         ]
         async with self.async_engine.begin() as conn:
             # 历史未绑定用户的 API Key 会在下方迁移语句里被静默删除，先计数告警
@@ -1440,6 +1510,126 @@ class PostgresManager(metaclass=SingletonMeta):
 
             for stmt in stmts:
                 await conn.execute(text(stmt))
+
+            # v10: 自定义分类 + 角色模板数据库化
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS custom_categories (
+                    id SERIAL PRIMARY KEY,
+                    entity_type VARCHAR(32) NOT NULL,
+                    slug VARCHAR(64) NOT NULL,
+                    label VARCHAR(64) NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_builtin BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    CONSTRAINT uq_custom_categories_type_slug UNIQUE (entity_type, slug)
+                );
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_custom_categories_entity_type ON custom_categories(entity_type);"))
+
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS role_templates (
+                    id SERIAL PRIMARY KEY,
+                    role_key VARCHAR(255) NOT NULL UNIQUE,
+                    category_id INTEGER NOT NULL REFERENCES custom_categories(id),
+                    name VARCHAR(128) NOT NULL,
+                    description TEXT,
+                    icon VARCHAR(32) DEFAULT '👤',
+                    color VARCHAR(32) DEFAULT 'blue',
+                    content TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'utc'),
+                    updated_at TIMESTAMP DEFAULT (NOW() AT TIME ZONE 'utc')
+                );
+            """))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_role_templates_category_id ON role_templates(category_id);"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_role_templates_role_key ON role_templates(role_key);"))
+
+            await conn.execute(text("ALTER TABLE agents ADD COLUMN IF NOT EXISTS category_id INTEGER;"))
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN IF NOT EXISTS category_id INTEGER;"))
+
+            # Seed initial categories and role templates (only on first migration)
+            result = await conn.execute(text("SELECT COUNT(*) FROM custom_categories"))
+            if result.scalar() == 0:
+                # --- Seed initial categories ---
+                # Agent categories (from existing itemCategory.js)
+                agent_categories = [
+                    ("general", "通用"), ("customer_service", "客服"), ("data_analysis", "数据分析"),
+                    ("content_creation", "内容创作"), ("code_assistant", "代码助手"),
+                    ("translation", "翻译"), ("education", "教育"), ("hr", "人力资源"),
+                    ("design", "设计"), ("finance", "财务"), ("legal", "法律"),
+                    ("research", "研究"), ("marketing", "营销"), ("productivity", "效率工具"),
+                ]
+                for i, (slug, label) in enumerate(agent_categories):
+                    await conn.execute(text(
+                        "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                        "VALUES (:et, :slug, :label, :so, TRUE)"
+                    ), {"et": "agent", "slug": slug, "label": label, "so": i})
+
+                # Skill categories (same as agent categories)
+                for i, (slug, label) in enumerate(agent_categories):
+                    await conn.execute(text(
+                        "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                        "VALUES (:et, :slug, :label, :so, TRUE)"
+                    ), {"et": "skill", "slug": slug, "label": label, "so": i})
+
+                # Role template categories (from existing CATEGORY_MAP)
+                role_categories = [
+                    ("general", "通用"), ("customer_service", "客户服务"), ("data_analysis", "数据分析"),
+                    ("content_writing", "内容创作"), ("marketing", "营销"), ("education", "教育培训"),
+                    ("design", "设计"), ("programming", "编程开发"), ("hr", "人力资源"),
+                    ("research", "研究分析"), ("finance", "财务"), ("legal", "法律"),
+                    ("health", "医疗健康"), ("travel", "旅行"), ("translation", "翻译"),
+                    ("social", "社交"), ("gaming", "游戏"), ("life_assistant", "生活助手"),
+                    ("office", "办公"), ("engineering", "工程技术"),
+                ]
+                for i, (slug, label) in enumerate(role_categories):
+                    await conn.execute(text(
+                        "INSERT INTO custom_categories (entity_type, slug, label, sort_order, is_builtin) "
+                        "VALUES (:et, :slug, :label, :so, TRUE)"
+                    ), {"et": "role_template", "slug": slug, "label": label, "so": i})
+
+                # --- Seed role templates from file system ---
+                # Read all role template markdown files
+                import os
+                import re
+                roles_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agents", "roles", "roles")
+                if os.path.isdir(roles_dir):
+                    # Build slug -> category_id map
+                    cat_result = await conn.execute(text(
+                        "SELECT id, slug FROM custom_categories WHERE entity_type = 'role_template'"
+                    ))
+                    slug_to_id = {row[1]: row[0] for row in cat_result.fetchall()}
+
+                    for category_dir in sorted(os.listdir(roles_dir)):
+                        cat_path = os.path.join(roles_dir, category_dir)
+                        if not os.path.isdir(cat_path) or category_dir.startswith("_") or category_dir == "examples":
+                            continue
+                        cat_slug = category_dir.replace("-", "_")
+                        cat_id = slug_to_id.get(cat_slug)
+                        if cat_id is None:
+                            continue
+                        for filename in sorted(os.listdir(cat_path)):
+                            if not filename.endswith(".md"):
+                                continue
+                            filepath = os.path.join(cat_path, filename)
+                            role_key = f"{category_dir}/{filename[:-3]}"
+                            name = filename[:-3].replace("-", " ").replace("_", " ").title()
+                            try:
+                                content = open(filepath, "r", encoding="utf-8").read()
+                            except Exception:
+                                content = ""
+                            # Extract description from first non-empty, non-heading line
+                            desc = ""
+                            for line in content.split("\n"):
+                                stripped = line.strip()
+                                if stripped and not stripped.startswith("#"):
+                                    desc = stripped[:200]
+                                    break
+                            await conn.execute(text(
+                                "INSERT INTO role_templates (role_key, category_id, name, description, content, sort_order) "
+                                "VALUES (:rk, :cid, :name, :desc, :content, 0) "
+                                "ON CONFLICT (role_key) DO NOTHING"
+                            ), {"rk": role_key, "cid": cat_id, "name": name, "desc": desc, "content": content})
 
             # 一次性回填：历史线程按各自最新顶层 Run 视为已读；新建线程由 repository 写入哨兵值，不受本回填影响。
             # 先用轻量 EXISTS 探测是否还有待回填的行，避免每次启动都对 agent_runs 做全表 DISTINCT ON 聚合；
