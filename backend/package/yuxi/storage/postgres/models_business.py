@@ -303,6 +303,7 @@ class Agent(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     icon = Column(String(255), nullable=True)
+    category = Column(String(50), nullable=True, index=True, comment="智能体分类：office/dev/data/content/info/business/enterprise/productivity/other")
 
     pics = Column(JSON, nullable=False, default=list)
     config_json = Column(JSON, nullable=False, default=dict)
@@ -335,6 +336,7 @@ class Agent(Base):
             "name": self.name,
             "description": self.description,
             "icon": normalize_public_minio_url(self.icon),
+            "category": self.category,
             "pics": [normalize_public_minio_url(pic) for pic in (self.pics or [])],
             "config_json": self.config_json or {},
             "share_config": self.share_config or {},
@@ -1411,6 +1413,7 @@ class ChannelConfigDB(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     slug = Column(String(64), nullable=False, unique=True, index=True, comment="Channel 唯一标识")
+    name = Column(String(128), nullable=True, comment="Channel 显示名称")
     channel_type = Column(String(32), nullable=False, comment="Channel 类型（feishu/dingtalk/wecom）")
     enabled = Column(Boolean, nullable=False, default=True, comment="是否启用")
     credentials = Column(JSON_VALUE, nullable=False, default=dict, comment="凭据配置（加密存储）")
@@ -1425,6 +1428,7 @@ class ChannelConfigDB(Base):
         return {
             "id": self.id,
             "slug": self.slug,
+            "name": self.name,
             "channel_type": self.channel_type,
             "enabled": bool(self.enabled),
             "credentials": self.credentials or {},
@@ -1435,3 +1439,198 @@ class ChannelConfigDB(Base):
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
+
+
+# ── 工作流引擎 ──────────────────────────────────────────────────────────
+
+
+class Workflow(Base):
+    """工作流定义（DAG 步骤、变量、全局配置）。"""
+
+    __tablename__ = "workflows"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String(80), nullable=False, unique=True, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    icon = Column(String(50), nullable=False, default="workflow")
+    category = Column(String(50), nullable=True, index=True,
+                      comment="工作流分类：office/dev/data/content/info/business/enterprise/productivity/other")
+
+    # DAG 定义 — steps[], variables[], concurrency
+    definition = Column(JSON_VALUE, nullable=False, default=dict)
+
+    default_model_spec = Column(JSON_VALUE, nullable=True, comment="LLM 步骤默认模型配置")
+
+    created_by = Column(String(64), nullable=True, index=True)
+    updated_by = Column(String(64), nullable=True)
+    is_builtin = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        steps = (self.definition or {}).get("steps", [])
+        return {
+            "id": self.id,
+            "slug": self.slug,
+            "name": self.name,
+            "description": self.description,
+            "icon": self.icon,
+            "category": self.category,
+            "definition": self.definition or {},
+            "default_model_spec": self.default_model_spec,
+            "step_count": len(steps),
+            "is_builtin": bool(self.is_builtin),
+            "created_by": self.created_by,
+            "updated_by": self.updated_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class WorkflowRun(Base):
+    """工作流运行实例。"""
+
+    __tablename__ = "workflow_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workflow_id = Column(Integer, ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="pending",
+                    comment="pending/running/completed/failed/cancelled")
+    trigger = Column(String(20), nullable=False, default="manual",
+                     comment="manual/scheduled/webhook")
+
+    input_variables = Column(JSON_VALUE, nullable=False, default=dict, comment="用户填写的输入变量")
+    context = Column(JSON_VALUE, nullable=False, default=dict, comment="运行时变量上下文（步骤间传递）")
+
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    total_tokens = Column(JSON_VALUE, nullable=False, default=dict, comment="汇总 token 消耗")
+    error_message = Column(Text, nullable=True)
+
+    created_by = Column(String(64), nullable=True, index=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "workflow_id": self.workflow_id,
+            "status": self.status,
+            "trigger": self.trigger,
+            "input_variables": self.input_variables or {},
+            "context": self.context or {},
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+            "total_tokens": self.total_tokens or {},
+            "error_message": self.error_message,
+            "created_by": self.created_by,
+            "created_at": format_utc_datetime(self.created_at),
+        }
+
+
+class WorkflowStepRun(Base):
+    """工作流步骤运行记录。"""
+
+    __tablename__ = "workflow_step_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    step_id = Column(String(100), nullable=False, comment="对应 definition.steps[].id")
+    step_type = Column(String(20), nullable=False, comment="llm/tool/http/condition/approval/script/output")
+    status = Column(String(20), nullable=False, default="pending",
+                    comment="pending/running/completed/failed/skipped/waiting_approval")
+
+    input_payload = Column(JSON_VALUE, nullable=False, default=dict, comment="步骤输入（从 context 解析变量）")
+    output_payload = Column(JSON_VALUE, nullable=False, default=dict, comment="步骤输出（写入 context）")
+    error_message = Column(Text, nullable=True)
+
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    tokens = Column(JSON_VALUE, nullable=False, default=dict, comment="LLM 步骤的 token 消耗")
+    execution_layer = Column(Integer, nullable=True, comment="DAG 层级")
+    loop_iteration = Column(Integer, nullable=False, default=0, comment="当前循环迭代次数")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "workflow_run_id": self.workflow_run_id,
+            "step_id": self.step_id,
+            "step_type": self.step_type,
+            "status": self.status,
+            "input_payload": self.input_payload or {},
+            "output_payload": self.output_payload or {},
+            "error_message": self.error_message,
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+            "tokens": self.tokens or {},
+            "execution_layer": self.execution_layer,
+            "loop_iteration": self.loop_iteration,
+        }
+
+
+class CustomCategory(Base):
+    """管理员自定义分类（智能体/技能/角色模板共用）。"""
+
+    __tablename__ = "custom_categories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entity_type = Column(String(32), nullable=False, index=True, comment="agent|skill|role_template")
+    slug = Column(String(64), nullable=False)
+    label = Column(String(64), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_builtin = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("entity_type", "slug", name="uq_custom_categories_type_slug"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "entity_type": self.entity_type,
+            "slug": self.slug,
+            "label": self.label,
+            "sort_order": self.sort_order,
+            "is_builtin": bool(self.is_builtin),
+            "created_at": format_utc_datetime(self.created_at),
+        }
+
+
+class RoleTemplate(Base):
+    """角色模板（数据库驱动，替代文件系统扫描）。"""
+
+    __tablename__ = "role_templates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    role_key = Column(String(255), nullable=False, unique=True, index=True, comment="业务唯一标识（原文件路径）")
+    category_id = Column(Integer, ForeignKey("custom_categories.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    icon = Column(String(32), nullable=True, default="👤")
+    color = Column(String(32), nullable=True, default="blue")
+    content = Column(Text, nullable=False, comment="Markdown 正文")
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    category = relationship("CustomCategory", foreign_keys=[category_id])
+
+    def to_dict(self, *, include_content: bool = False) -> dict[str, Any]:
+        result = {
+            "id": self.id,
+            "role_key": self.role_key,
+            "category_id": self.category_id,
+            "category_name": self.category.label if self.category else "",
+            "category_slug": self.category.slug if self.category else "",
+            "name": self.name,
+            "description": self.description or "",
+            "icon": self.icon or "👤",
+            "color": self.color or "blue",
+            "sort_order": self.sort_order,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+        if include_content:
+            result["content"] = self.content
+        return result
