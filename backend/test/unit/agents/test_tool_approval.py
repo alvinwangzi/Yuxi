@@ -58,10 +58,13 @@ def test_default_mode_without_current_project_keeps_writes_behind_approval():
 @pytest.mark.asyncio
 async def test_chatbot_graph_assembles_approval_with_current_project(monkeypatch):
     monkeypatch.setattr(chatbot_graph, "create_agent_filesystem_middleware", lambda *_args, **_kwargs: object())
+    async def mock_summary_middleware(_context, **_kwargs):
+        return object()
+
     monkeypatch.setattr(
         chatbot_graph,
         "create_summary_middleware_from_context",
-        lambda _context, **_kwargs: object(),
+        mock_summary_middleware,
     )
 
     async def no_optional_middleware(_context):

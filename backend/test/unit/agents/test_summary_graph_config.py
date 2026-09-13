@@ -27,7 +27,7 @@ def _context(summary_threshold: int = 123) -> SimpleNamespace:
 def _patch_common_graph_deps(monkeypatch: pytest.MonkeyPatch, graph_module, captured: dict) -> None:
     monkeypatch.setattr(graph_module, "create_agent_filesystem_middleware", lambda *_args, **_kwargs: object())
 
-    def create_summary_middleware_from_context(context, *, backend):
+    async def create_summary_middleware_from_context(context, *, backend):
         captured["summary_context"] = context
         captured["summary_backend"] = backend
         return object()
@@ -69,15 +69,16 @@ async def test_graph_uses_shared_summary_middleware_factory(
 
 
 @pytest.mark.unit
-def test_shared_summary_factory_uses_one_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_shared_summary_factory_uses_one_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
-    def load_model(fully_specified_name, *, session_id):
+    async def load_model(fully_specified_name, *, session_id):
         """记录摘要模型实际接收的会话 ID。"""
         captured["session_id"] = session_id
         return object()
 
-    monkeypatch.setattr(summary_module, "load_chat_model", load_model)
+    monkeypatch.setattr(summary_module, "async_load_chat_model", load_model)
 
     def create_summary_middleware(**kwargs):
         captured.update(kwargs)
@@ -88,7 +89,7 @@ def test_shared_summary_factory_uses_one_threshold(monkeypatch: pytest.MonkeyPat
     context.thread_id = "summary-thread"
     backend = object()
 
-    summary_module.create_summary_middleware_from_context(context, backend=backend)
+    await summary_module.create_summary_middleware_from_context(context, backend=backend)
 
     assert captured["backend"] is backend
     assert captured["session_id"] == "summary-thread"
@@ -118,12 +119,12 @@ async def test_graph_passes_conversation_session_to_model(monkeypatch, graph_mod
     monkeypatch.setattr(agent_class, "_get_checkpointer", AsyncMock(return_value=None))
     captured = {}
 
-    def load_model(fully_specified_name, *, session_id):
+    async def load_model(fully_specified_name, *, session_id):
         """用装配参数作为模型占位，核对传给图的对象。"""
         captured.update(spec=fully_specified_name, session_id=session_id)
         return captured
 
-    monkeypatch.setattr(graph_module, "load_chat_model", load_model)
+    monkeypatch.setattr(graph_module, "async_load_chat_model", load_model)
     monkeypatch.setattr(graph_module, "create_agent", lambda **kwargs: kwargs)
     graph = await agent_class().get_graph(context=context)
     assert graph["model"] == {"spec": context.model, "session_id": context.thread_id}

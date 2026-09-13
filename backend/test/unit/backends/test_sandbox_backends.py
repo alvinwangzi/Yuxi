@@ -724,6 +724,7 @@ def test_provider_maps_external_uid_only_at_provisioner_filesystem_boundary(monk
     provider = _make_provider(FakeClient())
     logical_uid = "oidc:12345678-1234-1234-1234-123456789abc"
     monkeypatch.setattr("yuxi.agents.backends.sandbox.provider.load_user_agent_env", lambda uid: {"OWNER": uid})
+    monkeypatch.setattr("yuxi.models.providers.cache.resolve_image_gen_env", lambda: {})
 
     provider.get("thread-1", uid=logical_uid, create_if_missing=True)
 
@@ -750,6 +751,7 @@ def test_provider_get_create_if_missing_ensures_expected_runtime_scope(monkeypat
 
     provider = _make_provider(FakeClient())
     monkeypatch.setattr("yuxi.agents.backends.sandbox.provider.load_user_agent_env", lambda uid: {"A": uid})
+    monkeypatch.setattr("yuxi.models.providers.cache.resolve_image_gen_env", lambda: {})
 
     connection = provider.get(
         "child-thread",
@@ -787,6 +789,7 @@ def test_provider_can_create_sandbox_without_environment(monkeypatch) -> None:
         "yuxi.agents.backends.sandbox.provider.load_user_agent_env",
         lambda _uid: pytest.fail("隔离 Sandbox 不应加载用户环境变量"),
     )
+    monkeypatch.setattr("yuxi.models.providers.cache.resolve_image_gen_env", lambda: {})
 
     provider.get("remote-skill-test", uid="remote-skill-test", create_if_missing=True, inherit_env=False)
 

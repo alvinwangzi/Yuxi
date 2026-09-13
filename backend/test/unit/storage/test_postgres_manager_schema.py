@@ -82,12 +82,39 @@ def test_agent_run_serialization_does_not_project_removed_redis_cursor():
     assert "last_event_id" not in run.to_dict()
 
 
+class _MockResult:
+    """Minimal mock result supporting scalar()/fetchall() for ensure_business_schema queries."""
+
+    def __init__(self, value=None):
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+    def scalar_one(self):
+        return self._value
+
+    def fetchall(self):
+        return self._value if isinstance(self._value, list) else []
+
+
 class _RecordingConnection:
     def __init__(self):
         self.statements: list[str] = []
 
     async def execute(self, statement, params=None):
         self.statements.append(str(statement))
+        stmt_upper = str(statement).upper()
+        # Return mock results for scalar queries to prevent AttributeError
+        if "COUNT(*)" in stmt_upper:
+            return _MockResult(1)  # Non-zero to skip seed branches
+        if "EXISTS" in stmt_upper and "INFORMATION_SCHEMA" in stmt_upper:
+            return _MockResult(False)  # Skip legacy table rebuild
+        if "EXISTS" in stmt_upper and "LAST_VIEWED_RUN_ID IS NULL" in stmt_upper:
+            return _MockResult(True)  # Enter the unviewed marker backfill branch
+        if stmt_upper.startswith("SELECT"):
+            return _MockResult([])
+        return _MockResult(None)
 
 
 class _RecordingBegin:
