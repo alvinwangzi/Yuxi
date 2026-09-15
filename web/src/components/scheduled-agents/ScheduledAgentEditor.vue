@@ -200,8 +200,16 @@ watch(
     workflowLoading.value = true
     try {
       const res = await workflowApi.get(workflowId)
-      if (res?.success && res.data) {
-        const variables = res.data.definition?.variables || []
+      const data = res?.data || res
+      if (data) {
+        // 优先从 definition.variables 读取，兼容从开始步骤中读取
+        let variables = data.definition?.variables || []
+        if (!variables.length) {
+          const startStep = (data.definition?.steps || []).find(s => s.type === 'start')
+          if (startStep?.variables) {
+            variables = startStep.variables
+          }
+        }
         workflowVariables.value = variables.map(v => typeof v === 'string' ? { name: v, default: '' } : v)
         // 初始化未设置的变量为默认值
         const currentVars = form.input_variables || {}
@@ -307,7 +315,7 @@ watch(
           </div>
         </template>
         <!-- Agent 模式：显示智能体选择器 -->
-        <div v-else class="setting-row">
+        <div v-if="form.target_type === 'agent'" class="setting-row">
           <span>智能体</span>
           <div class="setting-control">
             <select v-model="form.agent_slug" :disabled="saving" aria-label="执行智能体">
@@ -659,7 +667,7 @@ watch(
   margin: 0;
   padding: 0 14px;
   border-bottom: 1px solid var(--gray-100);
-  grid-template-columns: 110px minmax(0, 1fr);
+  grid-template-columns: 110px 1fr;
   align-items: center;
 
   > span {
@@ -669,7 +677,8 @@ watch(
 
   input,
   select {
-    width: min(240px, 100%);
+    width: 100%;
+    max-width: 280px;
     height: 30px;
     padding: 0 8px;
     border: 1px solid transparent;
@@ -679,8 +688,7 @@ watch(
     color: var(--gray-900);
     font: inherit;
     font-size: 13px;
-    justify-self: end;
-    text-align: right;
+    text-align: left;
 
     &:hover {
       background: var(--gray-50);
@@ -695,11 +703,12 @@ watch(
 
   select {
     cursor: pointer;
-    text-align-last: right;
+    text-align-last: left;
   }
 
   input[type='time'] {
-    width: min(130px, 100%);
+    width: 130px;
+    max-width: none;
   }
 }
 
@@ -711,7 +720,7 @@ watch(
 
 .frequency-options {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 10px;
 
   label {
@@ -732,14 +741,26 @@ watch(
 }
 
 .setting-control {
-  width: min(240px, 100%);
   min-width: 0;
-  justify-self: end;
+  text-align: left;
+
+  :deep(.project-trigger),
+  :deep(.project-selection) {
+    justify-content: flex-start;
+  }
+
+  :deep(.model-select) {
+    justify-content: flex-start;
+  }
+
+  :deep(.config-dropdown-trigger) {
+    justify-content: flex-start;
+  }
 }
 
 .weekday-options {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 4px;
 
   button {
@@ -772,7 +793,7 @@ watch(
     display: flex;
     align-items: center;
     gap: 8px;
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
 
   .interval-input {
@@ -996,7 +1017,7 @@ watch(
   }
 
   .setting-row {
-    grid-template-columns: 80px minmax(0, 1fr);
+    grid-template-columns: 80px 1fr;
   }
 
   .weekday-options {
