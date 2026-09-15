@@ -147,7 +147,33 @@ function flushAutoSave() {
 }
 
 function queueAutoSave(change) {
+  if (creatingDraft.value) return
   autosave.queue(change, selectedJob.value?.id)
+}
+
+async function confirmCreate(payload) {
+  saving.value = true
+  editorError.value = ''
+  try {
+    const requestId = runNowRequests.get('create')
+    const savedJob = await scheduledAgentApi.create({ ...payload, request_id: requestId })
+    jobs.value = [{ ...savedJob, runs: [] }, ...jobs.value]
+    creatingDraft.value = false
+    selectedJobId.value = savedJob.id
+    autosave.leaveEditor()
+    runNowRequests.complete('create')
+    message.success('任务已创建')
+  } catch (error) {
+    editorError.value = error.message || '创建任务失败'
+  } finally {
+    saving.value = false
+  }
+}
+
+function cancelDraft() {
+  creatingDraft.value = false
+  selectedJobId.value = ''
+  autosave.leaveEditor()
 }
 
 async function selectJob(job) {
@@ -414,7 +440,10 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
             :saving="saving"
             :save-state="saveState"
             :error="editorError"
+            :is-new="creatingDraft"
             @change="queueAutoSave"
+            @confirm="confirmCreate"
+            @cancel="cancelDraft"
           />
 
           <section v-if="selectedJob" class="history-section" aria-labelledby="runs-heading">

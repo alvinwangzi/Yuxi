@@ -23,9 +23,10 @@ const props = defineProps({
   workflows: { type: Array, default: () => [] },
   saving: { type: Boolean, default: false },
   saveState: { type: String, default: 'idle' },
-  error: { type: String, default: '' }
+  error: { type: String, default: '' },
+  isNew: { type: Boolean, default: false }
 })
-const emit = defineEmits(['change'])
+const emit = defineEmits(['change', 'cancel', 'confirm'])
 
 const defaultSchedule = {
   frequency: 'daily',
@@ -175,7 +176,7 @@ watch(
 watch(
   form,
   () => {
-    if (!hydrating) emit('change', changePayload())
+    if (!hydrating && !props.isNew) emit('change', changePayload())
   },
   { deep: true }
 )
@@ -227,6 +228,23 @@ watch(
   },
   { immediate: true }
 )
+
+// 新建任务时的本地校验错误
+const localError = ref('')
+
+function confirmAction() {
+  const result = changePayload()
+  if (result.error) {
+    localError.value = result.error
+    return
+  }
+  localError.value = ''
+  emit('confirm', result.payload)
+}
+
+function cancelAction() {
+  emit('cancel')
+}
 </script>
 
 <template>
@@ -239,7 +257,7 @@ watch(
         aria-label="任务名称"
         placeholder="未命名任务"
       />
-      <span class="save-state" :class="saveState">{{ saveLabel }}</span>
+      <span v-if="!isNew" class="save-state" :class="saveState">{{ saveLabel }}</span>
     </div>
 
     <!-- 执行目标选择器 -->
@@ -267,7 +285,7 @@ watch(
       />
     </label>
 
-    <p v-if="error" class="save-error" role="alert">{{ error }}</p>
+    <p v-if="localError || error" class="save-error" role="alert">{{ localError || error }}</p>
 
     <section class="settings-section" aria-labelledby="context-settings-heading">
       <h3 id="context-settings-heading">详情</h3>
@@ -330,7 +348,7 @@ watch(
           </div>
         </div>
         <div class="setting-row">
-          <span>Project</span>
+          <span>项目</span>
           <div class="setting-control">
             <ProjectSelectionSection
               v-model="form.project_id"
@@ -496,6 +514,13 @@ watch(
         </label>
       </div>
     </section>
+
+    <div v-if="isNew" class="editor-actions">
+      <button type="button" class="btn-cancel" :disabled="saving" @click="cancelAction">取消</button>
+      <button type="button" class="btn-confirm" :disabled="saving" @click="confirmAction">
+        {{ saving ? '创建中...' : '确认创建' }}
+      </button>
+    </div>
   </section>
 </template>
 
@@ -1033,5 +1058,52 @@ watch(
 .workflow-no-vars {
   opacity: 0.6;
   font-size: 0.85em;
+}
+
+.editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 22px 18px;
+
+  button {
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .btn-cancel {
+    border: 1px solid var(--gray-200);
+    background: transparent;
+    color: var(--gray-700);
+
+    &:hover:not(:disabled) {
+      background: var(--gray-50);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .btn-confirm {
+    border: 1px solid var(--main-color);
+    background: var(--main-color);
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
 }
 </style>
