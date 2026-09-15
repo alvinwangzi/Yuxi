@@ -983,6 +983,7 @@ class ScheduledAgentJob(Base):
     workflow_id = Column(Integer, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     prompt = Column(Text, nullable=True)  # target_type='agent' 时必填
+    input_variables = Column(JSON_VALUE, nullable=False, default=dict, comment="工作流输入变量快照")
     tool_approval_mode = Column(String(32), nullable=False, default="default")
     model_spec = Column(String(512), nullable=True)
     cron_expression = Column(String(100), nullable=False)
@@ -1003,6 +1004,7 @@ class ScheduledAgentJob(Base):
             "workflow_id": self.workflow_id,
             "name": self.name,
             "prompt": self.prompt,
+            "input_variables": self.input_variables or {},
             "tool_approval_mode": self.tool_approval_mode,
             "model_spec": self.model_spec,
             "cron_expression": self.cron_expression,
@@ -1044,6 +1046,7 @@ class ScheduledAgentRun(Base):
     workflow_id = Column(Integer, nullable=True)
     conversation_title = Column(String(255), nullable=False)
     prompt = Column(Text, nullable=True)
+    input_variables = Column(JSON_VALUE, nullable=False, default=dict)
     tool_approval_mode = Column(String(32), nullable=False)
     model_spec = Column(String(512), nullable=True)
     status = Column(String(32), nullable=False, default="dispatching")
@@ -1060,6 +1063,7 @@ class ScheduledAgentRun(Base):
             "scheduled_for": format_utc_datetime(self.scheduled_for),
             "target_type": self.target_type,
             "workflow_id": self.workflow_id,
+            "input_variables": self.input_variables or {},
             "status": self.status,
             "run_id": None,
             "error_message": self.error_message,

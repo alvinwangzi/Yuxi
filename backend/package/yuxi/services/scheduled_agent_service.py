@@ -146,6 +146,7 @@ def _new_scheduled_run(
         workflow_id=job.workflow_id,
         conversation_title=job.name,
         prompt=job.prompt,
+        input_variables=job.input_variables or {},
         tool_approval_mode=job.tool_approval_mode,
         model_spec=job.model_spec,
         status="skipped" if active_run else "dispatching",
@@ -229,6 +230,7 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
     agent_slug = None
     workflow_id = None
     prompt = None
+    input_variables = {}
     if target_type == "agent":
         agent_slug = _normalize_text(data.get("agent_slug"), "agent_slug", 64)
         prompt = _normalize_text(data.get("prompt"), "prompt", MAX_PROMPT_LENGTH)
@@ -236,6 +238,7 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
         workflow_id = data.get("workflow_id")
         if not workflow_id:
             raise HTTPException(status_code=422, detail="工作流类型必须指定 workflow_id")
+        input_variables = data.get("input_variables") or {}
 
     intent_hash = _intent_hash(
         {
@@ -245,6 +248,7 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
             "workflow_id": workflow_id,
             "name": name,
             "prompt": prompt,
+            "input_variables": input_variables,
             "tool_approval_mode": tool_approval_mode,
             "model_spec": model_spec,
             "cron_expression": expression,
@@ -276,6 +280,7 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
         workflow_id=workflow_id,
         name=name,
         prompt=prompt,
+        input_variables=input_variables,
         tool_approval_mode=tool_approval_mode,
         model_spec=model_spec,
         cron_expression=expression,
@@ -328,6 +333,8 @@ async def update_scheduled_job(*, job_id: str, user: User, db: AsyncSession, dat
     if "prompt" in data:
         prompt = data["prompt"]
         job.prompt = _normalize_text(prompt, "prompt", MAX_PROMPT_LENGTH) if prompt else None
+    if "input_variables" in data:
+        job.input_variables = data["input_variables"] or {}
     if "tool_approval_mode" in data:
         try:
             job.tool_approval_mode = normalize_tool_approval_mode(data["tool_approval_mode"])
@@ -536,7 +543,7 @@ async def _dispatch_workflow_run(
         workflow_id=workflow.id,
         status="pending",
         trigger="scheduled",
-        input_variables={},
+        input_variables=job.input_variables or {},
         context={},
         created_by=str(user.uid),
     )

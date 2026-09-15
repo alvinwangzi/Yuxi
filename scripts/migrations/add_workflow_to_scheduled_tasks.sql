@@ -50,3 +50,10 @@ ALTER COLUMN prompt DROP NOT NULL;
 ALTER TABLE scheduled_agent_runs 
 ALTER COLUMN agent_slug DROP NOT NULL,
 ALTER COLUMN prompt DROP NOT NULL;
+
+-- 为 scheduled_agent_jobs 和 scheduled_agent_runs 表添加 input_variables 字段
+ALTER TABLE scheduled_agent_jobs 
+ADD COLUMN IF NOT EXISTS input_variables JSONB NOT NULL DEFAULT '{}';
+
+ALTER TABLE scheduled_agent_runs 
+ADD COLUMN IF NOT EXISTS input_variables JSONB NOT NULL DEFAULT '{}';

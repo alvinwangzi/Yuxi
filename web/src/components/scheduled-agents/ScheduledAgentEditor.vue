@@ -1,9 +1,10 @@
 <script setup>
-import { computed, nextTick, reactive, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 
 import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 import ProjectSelectionSection from '@/components/ProjectSelectionSection.vue'
 import ToolApprovalModeSelector from '@/components/ToolApprovalModeSelector.vue'
+import { workflowApi } from '@/apis/workflow_api'
 import { AUTO_PROJECT_ID } from '@/utils/projectSelection'
 import {
   applyFrequencyChange,
@@ -57,6 +58,7 @@ function initialForm(job) {
     target_type: job?.target_type || 'agent',
     agent_slug: job?.agent_slug || agentValues.value[0] || '',
     workflow_id: job?.workflow_id || '',
+    input_variables: job?.input_variables || {},
     ...schedule,
     cronExpression: cronExpr,
     cronMinute: cronParts[0] || '0',
@@ -134,6 +136,7 @@ function changePayload() {
   // 根据 target_type 添加不同字段
   if (form.target_type === 'workflow') {
     payload.workflow_id = Number(form.workflow_id)
+    payload.input_variables = form.input_variables || {}
   } else {
     payload.prompt = form.prompt.trim()
     payload.agent_slug = form.agent_slug
@@ -181,6 +184,41 @@ watch(
 function changeFrequency(frequency) {
   Object.assign(form, applyFrequencyChange(form, frequency))
 }
+
+// 工作流变量定义
+const workflowVariables = ref([])
+const workflowLoading = ref(false)
+
+// 当选择工作流时加载变量定义
+watch(
+  () => form.workflow_id,
+  async (workflowId) => {
+    if (form.target_type !== 'workflow' || !workflowId) {
+      workflowVariables.value = []
+      return
+    }
+    workflowLoading.value = true
+    try {
+      const res = await workflowApi.get(workflowId)
+      if (res?.success && res.data) {
+        const variables = res.data.definition?.variables || []
+        workflowVariables.value = variables.map(v => typeof v === 'string' ? { name: v, default: '' } : v)
+        // 初始化未设置的变量为默认值
+        const currentVars = form.input_variables || {}
+        const newVars = {}
+        for (const v of workflowVariables.value) {
+          newVars[v.name] = currentVars[v.name] ?? v.default ?? ''
+        }
+        form.input_variables = newVars
+      }
+    } catch (err) {
+      console.error('加载工作流变量失败:', err)
+    } finally {
+      workflowLoading.value = false
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -242,6 +280,32 @@ function changeFrequency(frequency) {
             </select>
           </div>
         </div>
+        <!-- 工作流输入变量 -->
+        <template v-if="form.target_type === 'workflow' && form.workflow_id">
+          <div v-if="workflowLoading" class="setting-row">
+            <span>加载变量中...</span>
+          </div>
+          <template v-else-if="workflowVariables.length > 0">
+            <div
+              v-for="v in workflowVariables"
+              :key="v.name"
+              class="setting-row"
+            >
+              <span :title="v.description || ''">{{ v.name }}</span>
+              <div class="setting-control">
+                <input
+                  v-model="form.input_variables[v.name]"
+                  type="text"
+                  :placeholder="v.default || v.description || ''"
+                  :disabled="saving"
+                />
+              </div>
+            </div>
+          </template>
+          <div v-else class="setting-row workflow-no-vars">
+            <span>此工作流无输入变量</span>
+          </div>
+        </template>
         <!-- Agent 模式：显示智能体选择器 -->
         <div v-else class="setting-row">
           <span>智能体</span>
@@ -942,5 +1006,10 @@ function changeFrequency(frequency) {
   .frequency-options {
     flex-wrap: wrap;
   }
+}
+
+.workflow-no-vars {
+  opacity: 0.6;
+  font-size: 0.85em;
 }
 </style>

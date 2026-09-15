@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +33,7 @@ class ScheduledAgentCreate(BaseModel):
     agent_slug: str | None = Field(None, max_length=64)
     workflow_id: int | None = None
     prompt: str | None = Field(None, max_length=32_000)
+    input_variables: dict[str, Any] = Field(default_factory=dict)
     cron_expression: str = Field(..., max_length=100)
     timezone: str = Field(..., max_length=64)
     tool_approval_mode: str = Field("default", max_length=32)
@@ -62,6 +65,7 @@ class ScheduledAgentUpdate(BaseModel):
     agent_slug: str | None = Field(None, max_length=64)
     workflow_id: int | None = None
     prompt: str | None = Field(None, max_length=32_000)
+    input_variables: dict[str, Any] | None = None
     cron_expression: str | None = Field(None, max_length=100)
     timezone: str | None = Field(None, max_length=64)
     tool_approval_mode: str | None = Field(None, max_length=32)
