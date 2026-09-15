@@ -742,6 +742,7 @@ watch(
 
 .setting-control {
   min-width: 0;
+  max-width: 280px;
   text-align: left;
 
   :deep(.project-trigger),
@@ -951,8 +952,8 @@ watch(
   color: var(--gray-900);
   font: inherit;
   font-size: 13px;
-  justify-content: flex-end;
-  text-align: right;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .inline-editor :deep(.project-trigger-label),
@@ -962,7 +963,7 @@ watch(
   flex: 0 1 auto;
   font: inherit;
   font-size: 13px;
-  text-align: right;
+  text-align: left;
 }
 
 .inline-editor :deep(.config-dropdown-chevron) {
@@ -970,7 +971,7 @@ watch(
 }
 
 .inline-editor :deep(.model-select-content) {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .inline-editor :deep(.project-trigger:hover:not(:disabled)),
