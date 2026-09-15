@@ -17,6 +17,7 @@ import { describeSchedule, parseCronExpression } from '@/utils/scheduleFrequency
 const router = useRouter()
 const agentStore = useAgentStore()
 const jobs = ref([])
+const workflows = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const listError = ref('')
@@ -94,11 +95,23 @@ async function load({ silent = false } = {}) {
   }
 }
 
+async function loadWorkflows() {
+  try {
+    const result = await scheduledAgentApi.listWorkflows()
+    workflows.value = result.data || result || []
+  } catch (error) {
+    console.error('加载工作流失败:', error)
+  }
+}
+
 function scheduleLabel(job) {
   return describeSchedule(parseCronExpression(job.cron_expression))
 }
 
 function agentLabel(job) {
+  if (job.target_type === 'workflow') {
+    return workflows.value.find((wf) => wf.id === job.workflow_id)?.name || '工作流'
+  }
   return (
     availableAgents.value.find((agent) => (agent.slug || agent.id) === job.agent_slug)?.name ||
     job.agent_slug
@@ -268,7 +281,7 @@ watch([searchQuery, statusFilter], () => {
 
 onMounted(async () => {
   if (!agentStore.isInitialized) await agentStore.initialize()
-  await load()
+  await Promise.all([load(), loadWorkflows()])
 })
 
 onBeforeRouteLeave(() => flushAutoSave())
@@ -397,6 +410,7 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
           <ScheduledAgentEditor
             :job="selectedJob"
             :agents="availableAgents"
+            :workflows="workflows"
             :saving="saving"
             :save-state="saveState"
             :error="editorError"

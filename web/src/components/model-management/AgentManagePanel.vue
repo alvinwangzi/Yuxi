@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Plus, RefreshCw, Trash2, SquarePen, Bot, ChevronRight } from '@lucide/vue'
 import { useRouter } from 'vue-router'
@@ -22,10 +22,20 @@ const router = useRouter()
 const agentLoading = ref(false)
 const searchQuery = ref('')
 const selectedCategory = ref('all')
+const panelRef = ref(null)
 
 const agentBackendOptions = ref([])
 const managedAgents = ref([])
 const agentEditModalRef = ref(null)
+
+// 分页
+const PAGE_SIZE = 50
+const totalAgents = ref(0)
+const loadedCount = ref(0)
+const loadingMore = ref(false)
+const apiCategoryCounts = ref({})
+
+const hasMore = computed(() => loadedCount.value < totalAgents.value)
 
 const { categories: apiCategories, loadCategories } = useCategories('agent')
 
@@ -57,7 +67,7 @@ const filteredAgents = computed(() => {
     ...agent,
     resolvedCategoryId: resolveAgentCategoryId(agent)
   }))
-  const filtered = keyword
+  const keywordFiltered = keyword
     ? list.filter(
         (agent) =>
           String(agent.name || '')
@@ -71,23 +81,15 @@ const filteredAgents = computed(() => {
             .includes(keyword)
       )
     : list
-  let categoryFiltered = filtered
-  if (selectedCategory.value !== 'all') {
-    categoryFiltered = filtered.filter((agent) => agent.resolvedCategoryId === selectedCategory.value)
-  }
-  return [...categoryFiltered].sort((a, b) => {
+  return [...keywordFiltered].sort((a, b) => {
     if (isBuiltinAgent(a) !== isBuiltinAgent(b)) return isBuiltinAgent(a) ? -1 : 1
     return String(a.name || a.id).localeCompare(String(b.name || b.id), 'zh-CN')
   })
 })
 const categoryCounts = computed(() => {
-  const allAgents = (managedAgents.value || []).map((agent) => ({
-    ...agent,
-    resolvedCategoryId: resolveAgentCategoryId(agent)
-  }))
-  const counts = { all: allAgents.length }
+  const counts = { all: totalAgents.value }
   for (const cat of apiCategories.value) {
-    counts[cat.id] = allAgents.filter((a) => a.resolvedCategoryId === cat.id).length
+    counts[cat.id] = apiCategoryCounts.value[cat.id] ?? 0
   }
   return counts
 })
@@ -121,6 +123,14 @@ const getAgentDefaultIconSrc = (agent) => generateAgentFaceAvatar(agent.name, ag
 /** 返回智能体共享范围的简短展示文案。 */
 const getAgentShareLabel = (agent) => getShareConfigLabel(agent?.share_config)
 
+/** 获取智能体的分类标签 */
+const getAgentCategoryTag = (agent) => {
+  const categoryId = resolveAgentCategoryId(agent)
+  if (!categoryId) return null
+  const cat = apiCategories.value.find(c => c.id === categoryId)
+  return cat ? { name: cat.label, color: 'blue' } : null
+}
+
 // ============ Agent Operations ============
 const loadAgentBackends = async () => {
   try {
@@ -131,16 +141,42 @@ const loadAgentBackends = async () => {
   }
 }
 
-const loadAgents = async () => {
-  agentLoading.value = true
+const loadAgents = async (append = false) => {
+  if (!append) agentLoading.value = true
+  else loadingMore.value = true
   try {
-    const response = await agentApi.getAgents({ includeSubagents: true })
-    managedAgents.value = (response.agents || []).map(normalizeAgent)
+    const offset = append ? loadedCount.value : 0
+    const category = selectedCategory.value === 'all' ? null : Number(selectedCategory.value)
+    const response = await agentApi.getAgents({
+      includeSubagents: true,
+      offset,
+      limit: PAGE_SIZE,
+      categoryId: category
+    })
+    const newAgents = (response.agents || []).map(normalizeAgent)
+    const newSubagents = (response.subagents || []).map(normalizeAgent)
+    if (append) {
+      managedAgents.value = [...managedAgents.value, ...newAgents]
+    } else {
+      managedAgents.value = [...newAgents, ...newSubagents]
+    }
+    totalAgents.value = response.total ?? newAgents.length
+    loadedCount.value = (append ? loadedCount.value : 0) + newAgents.length
+    if (response.category_counts) {
+      apiCategoryCounts.value = response.category_counts
+    }
+    checkAutoLoad()
   } catch (error) {
     message.error(error.message || '加载智能体失败')
   } finally {
     agentLoading.value = false
+    loadingMore.value = false
   }
+}
+
+const onCategoryChange = (catKey) => {
+  selectedCategory.value = catKey
+  loadAgents()
 }
 
 const openCreateAgentModal = () => {
@@ -159,6 +195,42 @@ const openAgentChat = (agent) => {
 
 const refreshAgentLists = async () => {
   await Promise.all([loadAgents(), agentStore.fetchAgents()])
+}
+
+// ============ 滚动加载 ============
+const SCROLL_THRESHOLD = 200
+let scrollContainer = null
+
+const findScrollContainer = (el) => {
+  if (!el) return null
+  let node = el.parentElement
+  while (node) {
+    const style = getComputedStyle(node)
+    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+      return node
+    }
+    node = node.parentElement
+  }
+  return document.documentElement
+}
+
+const handleScroll = () => {
+  if (!hasMore.value || loadingMore.value || agentLoading.value) return
+  const el = scrollContainer
+  if (!el) return
+  const scrollBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  if (scrollBottom < SCROLL_THRESHOLD) {
+    loadAgents(true)
+  }
+}
+
+const checkAutoLoad = () => {
+  if (!hasMore.value || loadingMore.value || agentLoading.value) return
+  const el = scrollContainer
+  if (!el) return
+  if (el.scrollHeight <= el.clientHeight + 1) {
+    loadAgents(true)
+  }
 }
 
 const deleteAgent = async (agent) => {
@@ -186,6 +258,16 @@ const deleteAgent = async (agent) => {
 
 onMounted(async () => {
   await Promise.all([loadAgentBackends(), loadAgents(), loadCategories()])
+  scrollContainer = findScrollContainer(panelRef.value)
+  if (scrollContainer) {
+    scrollContainer.addEventListener('scroll', handleScroll, { passive: true })
+  }
+})
+
+onBeforeUnmount(() => {
+  if (scrollContainer) {
+    scrollContainer.removeEventListener('scroll', handleScroll)
+  }
 })
 
 defineExpose({
@@ -196,7 +278,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="agent-manage-panel">
+  <div ref="panelRef" class="agent-manage-panel">
     <PageShoulder v-model:search="searchQuery" search-placeholder="搜索智能体...">
       <template #actions>
         <a-button type="primary" class="lucide-icon-btn" @click="openCreateAgentModal">
@@ -217,7 +299,7 @@ defineExpose({
           type="button"
           class="category-tab"
           :class="{ active: selectedCategory === cat.key }"
-          @click="selectedCategory = cat.key"
+          @click="onCategoryChange(cat.key)"
         >
           {{ cat.label }}
           <span v-if="categoryCounts[cat.key] !== undefined" class="category-count">
@@ -247,7 +329,7 @@ defineExpose({
             :subtitle="agent.slug || agent.id"
             :description="agent.description || '暂无描述'"
             :default-icon="Bot"
-            :tags="[{ name: getAgentShareLabel(agent), color: 'gray' }]"
+            :tags="[{ name: getAgentShareLabel(agent), color: 'gray' }, getAgentCategoryTag(agent)].filter(Boolean)"
             class="config-card agent-card"
             @click="canManageAgent(agent) && openEditAgentModal(agent)"
           >
@@ -302,6 +384,20 @@ defineExpose({
         </ExtensionCardGrid>
       </section>
     </template>
+
+    <!-- 滚动加载提示 -->
+    <div v-if="hasMore && !searchQuery" class="scroll-load-hint">
+      <template v-if="loadingMore">
+        <RefreshCw :size="14" class="spin" />
+        <span>加载中...</span>
+      </template>
+      <template v-else>
+        <span>向下滚动加载更多（已加载 {{ loadedCount }} / {{ totalAgents }}）</span>
+      </template>
+    </div>
+    <div v-else-if="!hasMore && managedAgents.length > 0 && !searchQuery" class="scroll-load-hint end">
+      <span>— 已加载全部 {{ totalAgents }} 个智能体 —</span>
+    </div>
 
     <AgentEditModal
       ref="agentEditModalRef"
@@ -474,6 +570,20 @@ defineExpose({
   &:focus-visible {
     outline: 2px solid var(--main-200);
     outline-offset: 2px;
+  }
+}
+
+.scroll-load-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px 0 8px;
+  color: var(--gray-500);
+  font-size: 13px;
+
+  &.end {
+    color: var(--gray-400);
   }
 }
 

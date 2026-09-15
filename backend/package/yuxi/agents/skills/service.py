@@ -33,6 +33,7 @@ from yuxi.config import (
 from yuxi.permissions import ResourcePermission, normalize_permission_config, resolve_skill_permission
 from yuxi.storage.postgres.models_business import Skill, User
 from yuxi.utils.logging_config import logger
+from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.paths import ensure_within_root, open_directory_fd, open_regular_file_fd
 
 SKILL_SLUG_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -99,6 +100,7 @@ class ResolvedSkill:
     skill_dependencies: list[str]
     overrides_shared: bool = False
     shadowed_by_personal: bool = False
+    category_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """返回可安全提供给前端的 Skill 元数据。"""
@@ -116,6 +118,7 @@ class ResolvedSkill:
             "skill_dependencies": self.skill_dependencies,
             "overrides_shared": self.overrides_shared,
             "shadowed_by_personal": self.shadowed_by_personal,
+            "category_id": self.category_id,
         }
         if self.share_config is not None:
             data["share_config"] = self.share_config
@@ -597,7 +600,7 @@ async def list_accessible_skills(
     """返回当前用户最终生效的共享与个人 Skill。"""
     shared_items, personal_items = await asyncio.gather(
         _list_accessible_shared_skills(db, user, require_enabled=require_enabled),
-        list_personal_skills(str(user.uid)),
+        list_personal_skills(str(user.uid), db=db),
     )
     personal_by_slug = {item.slug: item for item in personal_items}
 
@@ -619,7 +622,7 @@ async def list_skill_cards_for_user(
     """返回管理页所需的共享与个人 Skill 卡片。"""
     shared_items, personal_items = await asyncio.gather(
         list_visible_skills_for_management(db, user),
-        list_personal_skills(str(user.uid)),
+        list_personal_skills(str(user.uid), db=db),
     )
     personal_slugs = {item.slug for item in personal_items}
     shared_slugs = {item.slug for item in shared_items}
@@ -632,11 +635,12 @@ async def list_skill_cards_for_user(
 
 
 async def list_visible_skills_for_management(db: AsyncSession, user: User) -> list[Skill]:
+    """返回管理页可见的共享 Skill（排除个人 Skill，由调用方单独处理）。"""
     repo = SkillRepository(db)
     visible: list[Skill] = []
     seen: set[str] = set()
     for item in await repo.list_all():
-        if item.slug in seen:
+        if item.source_scope == "personal" or item.slug in seen:
             continue
         if user_can_manage_skill(user, item) or (item.enabled and user_can_access_skill(user, item)):
             visible.append(item)
@@ -688,10 +692,14 @@ async def _list_accessible_shared_skills(
     *,
     require_enabled: bool = True,
 ) -> list[Skill]:
-    """按现有共享范围返回用户可访问的数据库 Skill。"""
+    """按现有共享范围返回用户可访问的数据库 Skill（排除个人 Skill）。"""
     repo = SkillRepository(db)
     items = await repo.list_enabled() if require_enabled else await repo.list_all()
-    return [item for item in items if user_can_access_skill(user, item, require_enabled=require_enabled)]
+    return [
+        item
+        for item in items
+        if item.source_scope != "personal" and user_can_access_skill(user, item, require_enabled=require_enabled)
+    ]
 
 
 async def _list_shared_skill_slugs(db: AsyncSession, user: User) -> list[str]:
@@ -924,8 +932,18 @@ def _resolve_personal_skill_dir(root: Path, slug: str) -> Path:
     return target
 
 
-async def list_personal_skills(uid: str) -> list[ResolvedSkill]:
-    """直接扫描个人 Skill 持久目录。"""
+async def list_personal_skills(uid: str, *, db: AsyncSession | None = None) -> list[ResolvedSkill]:
+    """列出用户个人 Skill：优先从数据库读取，无 db 时回落到文件系统扫描。"""
+    if db is not None:
+        repo = SkillRepository(db)
+        rows = await repo.list_by_owner(uid)
+        if rows:
+            return [_personal_skill_from_db(row, uid) for row in rows]
+        # DB 无记录时回落扫描，并回填数据库
+        items = await asyncio.to_thread(_scan_personal_skills, uid)
+        if items:
+            await _sync_personal_skills_to_db(db, uid, items)
+        return items
     return await asyncio.to_thread(_scan_personal_skills, uid)
 
 
@@ -934,14 +952,18 @@ async def install_personal_skill_dir(
     source_dir: Path | str,
     *,
     expected_slug: str | None = None,
+    db: AsyncSession | None = None,
 ) -> ResolvedSkill:
     """将一个 Skill 原子安装到当前用户个人持久源。"""
-    return await asyncio.to_thread(
+    item = await asyncio.to_thread(
         _install_personal_skill_dir_sync,
         uid,
         Path(source_dir),
         expected_slug=expected_slug,
     )
+    if db is not None:
+        await _upsert_personal_skill_to_db(db, uid, item)
+    return item
 
 
 async def read_personal_skill_file(uid: str, slug: str, relative_path: str) -> dict[str, Any]:
@@ -959,12 +981,17 @@ async def read_personal_skill_file(uid: str, slug: str, relative_path: str) -> d
     return {"path": normalized_path, "content": content}
 
 
-async def delete_personal_skill(uid: str, slug: str) -> None:
+async def delete_personal_skill(uid: str, slug: str, *, db: AsyncSession | None = None) -> None:
     """删除当前用户个人 Skill。"""
     skill_dir = _resolve_personal_skill_dir(_personal_skills_root(uid), slug)
     if not skill_dir.is_dir():
         raise ValueError("个人 Skill 不存在")
     await asyncio.to_thread(shutil.rmtree, skill_dir)
+    if db is not None:
+        repo = SkillRepository(db)
+        row = await repo.get_by_slug_and_owner(slug, uid)
+        if row is not None:
+            await repo.delete(row)
 
 
 async def enable_personal_skills_for_agent_config(
@@ -1025,6 +1052,7 @@ def _resolved_shared_skill(item: Skill, *, shadowed_by_personal: bool = False) -
         mcp_dependencies=normalize_string_list(item.mcp_dependencies),
         skill_dependencies=normalize_string_list(item.skill_dependencies),
         shadowed_by_personal=shadowed_by_personal,
+        category_id=item.category_id,
     )
 
 
@@ -1049,6 +1077,99 @@ def _resolved_personal_skill(uid: str, root: Path, metadata: dict[str, Any]) -> 
         mcp_dependencies=[],
         skill_dependencies=[],
     )
+
+
+def _personal_skill_from_db(row: Skill, uid: str) -> ResolvedSkill:
+    """将数据库中的个人 Skill 行转换为 ResolvedSkill。"""
+    root = _personal_skills_root(uid)
+    return ResolvedSkill(
+        id=row.id,
+        slug=row.slug,
+        name=row.name,
+        description=row.description,
+        source_type=PERSONAL_SKILL_SOURCE_TYPE,
+        source_scope=PERSONAL_SKILL_SOURCE_TYPE,
+        source_dir=root / row.slug,
+        enabled=True,
+        created_by=uid,
+        share_config=None,
+        tool_dependencies=normalize_string_list(row.tool_dependencies),
+        mcp_dependencies=normalize_string_list(row.mcp_dependencies),
+        skill_dependencies=normalize_string_list(row.skill_dependencies),
+        category_id=row.category_id,
+    )
+
+
+async def _upsert_personal_skill_to_db(
+    db: AsyncSession, uid: str, item: ResolvedSkill
+) -> None:
+    """将个人 Skill 元数据写入或更新到数据库。"""
+    repo = SkillRepository(db)
+    existing = await repo.get_by_slug_and_owner(item.slug, uid)
+    if existing is not None:
+        existing.name = item.name
+        existing.description = item.description
+        existing.tool_dependencies = item.tool_dependencies or []
+        existing.mcp_dependencies = item.mcp_dependencies or []
+        existing.skill_dependencies = item.skill_dependencies or []
+        existing.updated_by = uid
+        existing.updated_at = utc_now_naive()
+        await db.flush()
+    else:
+        await repo.create(
+            slug=item.slug,
+            name=item.name,
+            description=item.description,
+            source_type=PERSONAL_SKILL_SOURCE_TYPE,
+            tool_dependencies=item.tool_dependencies,
+            mcp_dependencies=item.mcp_dependencies,
+            skill_dependencies=item.skill_dependencies,
+            dir_path=item.slug,
+            share_config={
+                "version": 2,
+                "read_scope": {"access_level": "user", "department_ids": [], "user_uids": [uid]},
+                "manage_scope": None,
+            },
+            enabled=True,
+            created_by=uid,
+            source_scope="personal",
+            owner_uid=uid,
+        )
+        await db.flush()
+
+
+async def _sync_personal_skills_to_db(
+    db: AsyncSession, uid: str, items: list[ResolvedSkill]
+) -> None:
+    """将文件系统扫描结果批量同步到数据库。"""
+    repo = SkillRepository(db)
+    existing_rows = await repo.list_by_owner(uid)
+    existing_slugs = {row.slug for row in existing_rows}
+    for item in items:
+        if item.slug not in existing_slugs:
+            try:
+                await repo.create(
+                    slug=item.slug,
+                    name=item.name,
+                    description=item.description,
+                    source_type=PERSONAL_SKILL_SOURCE_TYPE,
+                    tool_dependencies=item.tool_dependencies,
+                    mcp_dependencies=item.mcp_dependencies,
+                    skill_dependencies=item.skill_dependencies,
+                    dir_path=item.slug,
+                    share_config={
+                        "version": 2,
+                        "read_scope": {"access_level": "user", "department_ids": [], "user_uids": [uid]},
+                        "manage_scope": None,
+                    },
+                    enabled=True,
+                    created_by=uid,
+                    source_scope="personal",
+                    owner_uid=uid,
+                )
+            except Exception as exc:
+                logger.warning(f"回填个人 Skill 到 DB 失败: uid={uid}, slug={item.slug}, error={exc}")
+    await db.flush()
 
 
 def _scan_personal_skills(uid: str) -> list[ResolvedSkill]:
@@ -1395,6 +1516,7 @@ async def confirm_personal_skill_install_draft(
     draft_id: str,
     slugs: list[str] | None,
     operator: User,
+    db: AsyncSession | None = None,
 ) -> list[dict[str, Any]]:
     """确认草稿并将选中 Skill 安装到当前用户个人持久源。"""
     draft_dir, _data, draft_items = _load_and_select_draft_items(draft_id, slugs, operator)
@@ -1431,6 +1553,7 @@ async def confirm_personal_skill_install_draft(
                 str(operator.uid),
                 source_dir,
                 expected_slug=personal_slug,
+                db=db,
             )
             results.append(
                 {
@@ -1468,7 +1591,7 @@ async def get_skill_or_raise(db: AsyncSession, slug: str) -> Skill:
         raise ValueError("无效 skill slug")
 
     repo = SkillRepository(db)
-    item = await repo.get_by_slug(slug)
+    item = await repo.get_by_slug(slug, source_scope="shared")
     if not item:
         raise ValueError(f"技能 '{slug}' 不存在")
     return item
@@ -1640,7 +1763,7 @@ async def export_skill_zip(db: AsyncSession, *, slug: str, operator: User) -> tu
 
 async def delete_skill(db: AsyncSession, *, slug: str, operator: User) -> None:
     repo = SkillRepository(db)
-    item = await repo.get_by_slug(slug, for_update=True)
+    item = await repo.get_by_slug(slug, source_scope="shared", for_update=True)
     if not item:
         raise ValueError(f"技能 '{slug}' 不存在")
     if not user_can_manage_skill(operator, item):
@@ -1763,7 +1886,7 @@ async def init_builtin_skills(db: AsyncSession, *, created_by: str = "system") -
 
     for spec in list_builtin_skill_specs():
         slug = spec["slug"]
-        existing = await repo.get_by_slug(slug)
+        existing = await repo.get_by_slug(slug, source_scope="shared")
         if existing and not is_builtin_skill(existing):
             raise ValueError(f"内置 skill '{slug}' 与已存在的非内置 skill 冲突")
 

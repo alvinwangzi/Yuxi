@@ -45,12 +45,22 @@ export const agentApi = {
   },
 
   /**
-   * 获取智能体列表
-   * @returns {Promise} - 智能体列表
+   * 获取智能体列表（支持分页）
+   * @param {Object} options
+   * @param {boolean} options.includeSubagents - 是否包含子智能体
+   * @param {number} options.offset - 分页偏移
+   * @param {number} options.limit - 每页数量，0 表示不分页
+   * @param {number|null} options.categoryId - 分类 ID 过滤
+   * @returns {Promise}
    */
-  getAgents: ({ includeSubagents = false } = {}) => {
+  getAgents: ({ includeSubagents = false, offset = 0, limit = 0, categoryId = null } = {}) => {
     const params = new URLSearchParams()
     if (includeSubagents) params.set('include_subagents', 'true')
+    if (limit > 0) {
+      params.set('offset', String(offset))
+      params.set('limit', String(limit))
+    }
+    if (categoryId) params.set('category_id', String(categoryId))
     const query = params.toString()
     return apiGet(query ? `/api/agent?${query}` : '/api/agent')
   },
@@ -62,7 +72,7 @@ export const agentApi = {
    * @param {string} agentId - 智能体ID
    * @returns {Promise} - 智能体详情
    */
-  getAgentDetail: (agentId) => apiGet(`/api/agent/${agentId}`),
+  getAgentDetail: (agentId) => apiGet(`/api/agent/lookup?slug=${encodeURIComponent(agentId)}`),
 
   /**
    * 获取智能体历史消息
@@ -114,9 +124,9 @@ export const agentApi = {
 
   createAgent: (payload) => apiPost('/api/agent', payload),
 
-  updateAgent: (agentId, payload) => apiPut(`/api/agent/${agentId}`, payload),
+  updateAgent: (agentId, payload) => apiPut(`/api/agent/${encodeURIComponent(agentId)}`, payload),
 
-  deleteAgent: (agentId) => apiDelete(`/api/agent/${agentId}`),
+  deleteAgent: (agentId) => apiDelete(`/api/agent/${encodeURIComponent(agentId)}`),
 
   /**
    * 创建异步运行任务（Run）

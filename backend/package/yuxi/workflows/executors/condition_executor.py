@@ -11,7 +11,7 @@ from yuxi.workflows.template import evaluate_condition
 class ConditionStepExecutor(BaseStepExecutor):
     """条件分支 — 求值后返回 "then" 或 "else"。"""
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         condition = step_data.get("condition", "")
         if not condition:
             raise ValueError("condition 步骤必须指定 condition 表达式")

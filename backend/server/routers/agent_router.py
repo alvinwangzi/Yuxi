@@ -140,15 +140,42 @@ async def get_agent_backend(
 @agent_router.get("")
 async def list_agents(
     include_subagents: bool = Query(False),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(0, ge=0, description="0 表示不分页，返回全部"),
+    category_id: int | None = Query(None),
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
     repo = AgentRepository(db)
     await repo.ensure_default_agent()
-    items = await repo.list_visible(user=current_user, include_subagent_definitions=include_subagents)
     backend_info_cache: dict[tuple[str, bool, str], dict] = {}
+
+    if limit > 0:
+        items, total = await repo.list_visible_paginated(
+            user=current_user, offset=offset, limit=limit, category_id=category_id
+        )
+        category_counts = await repo.get_agent_category_counts()
+    else:
+        items = await repo.list_visible(user=current_user, include_subagent_definitions=False)
+        total = len(items)
+        category_counts = await repo.get_agent_category_counts()
+
     agents = [await _serialize_agent(repo, item, current_user, backend_info_cache=backend_info_cache) for item in items]
-    return {"agents": agents}
+
+    result: dict[str, Any] = {"agents": agents}
+    if limit > 0:
+        result["total"] = total
+        result["category_counts"] = category_counts
+
+    if include_subagents:
+        sub_items = await repo.list_visible_subagents(user=current_user)
+        sub_agents = [
+            await _serialize_agent(repo, item, current_user, backend_info_cache=backend_info_cache)
+            for item in sub_items
+        ]
+        result["subagents"] = sub_agents
+
+    return result
 
 
 @agent_router.get("/default")
@@ -197,6 +224,20 @@ async def create_agent(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"agent": await _serialize_agent(repo, item, current_user, include_configurable_items=True)}
+
+
+@agent_router.get("/lookup")
+async def get_agent_by_slug(
+    slug: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """通过 slug 查询智能体详情（支持含 / 的 slug）。"""
+    repo = AgentRepository(db)
+    item = await repo.get_visible_by_slug(slug=slug, user=current_user, kind="any")
+    if not item:
+        raise HTTPException(status_code=404, detail="智能体不存在")
     return {"agent": await _serialize_agent(repo, item, current_user, include_configurable_items=True)}
 
 

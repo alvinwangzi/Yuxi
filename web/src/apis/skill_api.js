@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut, apiDelete, apiAdminGet, apiAdminPost } from './base'
+import { apiGet, apiPost, apiPut, apiDelete, apiAdminGet, apiAdminPost, apiAdminPut } from './base'
 
 const BASE_URL = '/api/system/skills'
 const USER_BASE_URL = '/api/skills'
@@ -103,6 +103,12 @@ export const updateSkillEnabled = async (slug, enabled) => {
   return apiPut(`${BASE_URL}/${encodeURIComponent(slug)}/enabled`, { enabled })
 }
 
+export const updateSkillCategory = async (slug, categoryId) => {
+  return apiAdminPut(`${BASE_URL}/${encodeURIComponent(slug)}/category`, {
+    category_id: categoryId
+  })
+}
+
 export const deleteSkillFile = async (slug, path) => {
   return apiDelete(`${BASE_URL}/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`)
 }
@@ -145,6 +151,7 @@ export const skillApi = {
   updateSkillDependencies,
   updateSkillShareConfig,
   updateSkillEnabled,
+  updateSkillCategory,
   deleteSkillFile,
   exportSkill,
   deleteSkill,

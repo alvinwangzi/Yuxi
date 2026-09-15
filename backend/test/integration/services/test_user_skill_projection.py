@@ -68,7 +68,7 @@ async def test_projection_refresh_waits_for_lock_then_reloads_revoked_authorizat
     monkeypatch.setattr(skill_service, "get_skill_data_dir", lambda: tmp_path / "skill-sources")
     monkeypatch.setattr(skill_service, "get_skill_projection_dir", lambda: tmp_path / "skill-projections")
 
-    async def no_personal_skills(_uid: str):
+    async def no_personal_skills(_uid: str, *, db=None):
         return []
 
     monkeypatch.setattr(skill_service, "list_personal_skills", no_personal_skills)

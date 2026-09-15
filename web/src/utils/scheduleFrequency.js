@@ -3,7 +3,14 @@ export const scheduleFrequencies = [
   { value: 'weekly', label: '每周' },
   { value: 'monthly', label: '每月' },
   { value: 'yearly', label: '每年' },
+  { value: 'interval', label: '每隔' },
   { value: 'custom', label: '自定义' }
+]
+
+export const intervalUnits = [
+  { value: 'minute', label: '分钟' },
+  { value: 'hour', label: '小时' },
+  { value: 'day', label: '天' }
 ]
 
 export const weekdayOptions = [
@@ -48,7 +55,25 @@ const expandWeekdays = (value) => {
 }
 
 export const buildCronExpression = (schedule) => {
-  const { frequency, time, weekdays, dayOfMonth, month, cronExpression } = schedule
+  const { frequency, time, weekdays, dayOfMonth, month, cronExpression, intervalValue, intervalUnit } = schedule
+  if (frequency === 'interval') {
+    const n = Math.max(1, Math.floor(Number(intervalValue) || 1))
+    if (intervalUnit === 'minute') {
+      // 每 N 分钟：*/N * * * *
+      return `*/${n} * * * *`
+    }
+    if (intervalUnit === 'hour') {
+      // 每 N 小时：0 */N * * *
+      const [minute] = normalizeTime(time)
+      return `${minute} */${n} * * *`
+    }
+    if (intervalUnit === 'day') {
+      // 每 N 天：基于基准时间的 cron，实际间隔由调度器处理
+      const [minute, hour] = normalizeTime(time)
+      return `${minute} ${hour} */${n} * *`
+    }
+    return '0 9 * * *'
+  }
   if (frequency === 'custom') return String(cronExpression || '').trim()
   const [minute, hour] = normalizeTime(time)
   if (frequency === 'weekly') {
@@ -64,7 +89,7 @@ export const buildCronExpression = (schedule) => {
 export const applyFrequencyChange = (schedule, frequency) => ({
   ...schedule,
   cronExpression:
-    frequency === 'custom' && schedule.frequency !== 'custom'
+    (frequency === 'custom' || frequency === 'interval') && schedule.frequency !== 'custom' && schedule.frequency !== 'interval'
       ? buildCronExpression(schedule)
       : schedule.cronExpression,
   frequency
@@ -83,7 +108,26 @@ export const parseCronExpression = (expression) => {
   const simpleDay = /^([1-9]|[12]\d|3[01])$/.test(day)
   const simpleMonth = /^([1-9]|1[0-2])$/.test(month)
   const simpleWeekday = /^(?:[0-7](?:-[0-7])?)(?:,[0-7](?:-[0-7])?)*$/.test(weekday)
-  const result = { cronExpression, time, weekdays: [1], dayOfMonth: 1, month: 1 }
+  const result = { cronExpression, time, weekdays: [1], dayOfMonth: 1, month: 1, intervalValue: 1, intervalUnit: 'hour' }
+
+  // 检测间隔模式：*/N * * * * 或 */N 在小时/天位置
+  if (parts.length === 5) {
+    const minuteStep = /^\*\/(\d+)$/.test(minute)
+    const hourStep = /^\*\/(\d+)$/.test(hour)
+    const dayStep = /^\*\/(\d+)$/.test(day)
+    if (minuteStep && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+      const n = Number(minute.match(/^\*\/(\d+)$/)[1])
+      return { ...result, frequency: 'interval', intervalValue: n, intervalUnit: 'minute' }
+    }
+    if (hourStep && day === '*' && month === '*' && weekday === '*' && numericTime) {
+      const n = Number(hour.match(/^\*\/(\d+)$/)[1])
+      return { ...result, frequency: 'interval', intervalValue: n, intervalUnit: 'hour', time }
+    }
+    if (dayStep && month === '*' && weekday === '*' && numericTime) {
+      const n = Number(day.match(/^\*\/(\d+)$/)[1])
+      return { ...result, frequency: 'interval', intervalValue: n, intervalUnit: 'day', time }
+    }
+  }
 
   if (parts.length !== 5 || !timeSupported) {
     return { ...result, frequency: 'custom' }
@@ -116,7 +160,12 @@ export const parseCronExpression = (expression) => {
 }
 
 export const describeSchedule = (schedule) => {
-  const { frequency, time, weekdays, dayOfMonth, month, cronExpression } = schedule
+  const { frequency, time, weekdays, dayOfMonth, month, cronExpression, intervalValue, intervalUnit } = schedule
+  if (frequency === 'interval') {
+    const n = Math.max(1, Math.floor(Number(intervalValue) || 1))
+    const unitLabel = intervalUnit === 'minute' ? '分钟' : intervalUnit === 'hour' ? '小时' : '天'
+    return `每隔 ${n} ${unitLabel}`
+  }
   if (frequency === 'custom') return `Cron ${cronExpression}`
   const displayTime = time || '09:00'
   if (frequency === 'weekly') {

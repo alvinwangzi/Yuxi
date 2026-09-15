@@ -88,6 +88,12 @@ const router = createRouter({
           name: 'AgentManageComp',
           component: () => import('../views/AgentManageView.vue'),
           meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: 'roles',
+          name: 'AgentManageRoles',
+          component: () => import('../views/AgentManageView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
         }
       ]
     },
@@ -116,6 +122,12 @@ const router = createRouter({
           meta: { keepAlive: false, requiresAuth: true }
         },
         {
+          path: 'platform',
+          name: 'WorkflowsPlatform',
+          component: () => import('../views/WorkflowView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
           path: ':id',
           name: 'WorkflowEditor',
           component: () => import('../views/WorkflowEditorView.vue'),
@@ -125,16 +137,8 @@ const router = createRouter({
     },
     {
       path: '/roles',
-      name: 'roles',
-      component: AppLayout,
-      children: [
-        {
-          path: '',
-          name: 'RolesComp',
-          component: () => import('../views/RolesView.vue'),
-          meta: { keepAlive: false, requiresAuth: true }
-        }
-      ]
+      name: 'roles-redirect',
+      redirect: '/agent-manage/roles',
     },
     {
       path: '/extensions',

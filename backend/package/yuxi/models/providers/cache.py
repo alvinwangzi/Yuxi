@@ -259,3 +259,41 @@ def resolve_image_gen_env() -> dict[str, str]:
         return env
     except Exception:
         return {}
+
+
+def resolve_video_gen_env() -> dict[str, str]:
+    """从模型缓存解析所有启用的 video 类型模型，返回沙壆环境变量。
+
+    环境变量：
+    - VIDEO_GEN_API_KEY / VIDEO_GEN_BASE_URL / VIDEO_GEN_MODEL：默认（第一个）模型
+    - VIDEO_GEN_MODELS：全部可用模型的 JSON 数组
+    未配置 video 模型时返回空字典。
+    """
+    try:
+        video_models = model_cache.get_all_specs("video")
+        if not video_models:
+            return {}
+
+        default = video_models[0]
+        env: dict[str, str] = {}
+        if default.api_key:
+            env["VIDEO_GEN_API_KEY"] = default.api_key
+        if default.base_url:
+            env["VIDEO_GEN_BASE_URL"] = default.base_url
+        env["VIDEO_GEN_MODEL"] = default.model_id
+
+        models_list: list[dict[str, str]] = []
+        for info in video_models:
+            entry: dict[str, str] = {"model": info.model_id}
+            if info.base_url:
+                entry["base_url"] = info.base_url
+            if info.api_key:
+                entry["api_key"] = info.api_key
+            if info.display_name and info.display_name != info.model_id:
+                entry["display_name"] = info.display_name
+            models_list.append(entry)
+        env["VIDEO_GEN_MODELS"] = json.dumps(models_list, ensure_ascii=False)
+
+        return env
+    except Exception:
+        return {}

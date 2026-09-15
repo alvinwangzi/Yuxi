@@ -16,7 +16,7 @@ class ToolStepExecutor(BaseStepExecutor):
     - MCP 工具：通过 langchain_mcp_adapters 转换的 MCP Server 工具
     """
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         tool_name = step_data.get("tool_name")
         if not tool_name:
             raise ValueError("tool 步骤必须指定 tool_name")

@@ -14,9 +14,37 @@
       :position="Position.Left"
       class="node-handle node-handle-target"
     />
-    <!-- 输出端口（右侧）；结束节点没有出口 -->
+    <!-- 条件节点：多分支输出端口（动态） -->
+    <template v-if="data.stepType === 'condition' && conditionBranches.length > 0">
+      <Handle
+        v-for="(branch, idx) in conditionBranches"
+        :key="branch.id"
+        type="source"
+        :position="Position.Right"
+        :id="branch.id"
+        class="node-handle node-handle-source node-handle-branch"
+        :style="{
+          top: branchTopPosition(idx) + '%',
+          borderColor: branchColorFor(idx) + ' !important'
+        }"
+      >
+        <span
+          class="branch-handle-label"
+          :style="{ color: branchColorFor(idx), background: branchBgFor(idx) }"
+        >{{ branch.label }}</span>
+      </Handle>
+    </template>
+    <!-- 条件节点无分支时的占位 -->
+    <template v-else-if="data.stepType === 'condition'">
+      <Handle
+        type="source"
+        :position="Position.Right"
+        class="node-handle node-handle-source"
+      />
+    </template>
+    <!-- 普通节点：单输出端口（右侧）；结束节点没有出口 -->
     <Handle
-      v-if="data.stepType !== 'end'"
+      v-else-if="data.stepType !== 'end'"
       type="source"
       :position="Position.Right"
       class="node-handle node-handle-source"
@@ -28,6 +56,18 @@
 import { Handle, Position } from '@vue-flow/core'
 import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Play, Flag } from '@lucide/vue'
 import { computed } from 'vue'
+
+// 分支颜色调色板（8 色循环）
+const BRANCH_COLORS = [
+  '#10b981', // emerald
+  '#f59e0b', // amber
+  '#3b82f6', // blue
+  '#ef4444', // red
+  '#8b5cf6', // violet
+  '#ec4899', // pink
+  '#06b6d4', // cyan
+  '#84cc16'  // lime
+]
 
 const stepTypeLabels = {
   start: '开始',
@@ -61,6 +101,27 @@ const props = defineProps({
 
 // 开始/结束节点是固定锚点：隐藏类型副标题，只保留必要端口
 const isTerminal = computed(() => ['start', 'end'].includes(props.data?.stepType))
+
+// 条件节点的分支列表（从节点 data 中读取）
+const conditionBranches = computed(() => props.data?.branches || [])
+
+// 计算分支 handle 的垂直位置百分比（均匀分布在 15%~85% 之间）
+const branchTopPosition = (idx) => {
+  const n = conditionBranches.value.length
+  if (n <= 1) return 50
+  return Math.round(15 + idx * 70 / (n - 1))
+}
+
+const branchColorFor = (idx) => BRANCH_COLORS[idx % BRANCH_COLORS.length]
+
+const branchBgFor = (idx) => {
+  const hex = BRANCH_COLORS[idx % BRANCH_COLORS.length]
+  // 将 hex 转为 rgba 10% 透明度
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, 0.1)`
+}
 </script>
 
 <style scoped>
@@ -129,6 +190,19 @@ const isTerminal = computed(() => ['start', 'end'].includes(props.data?.stepType
   transition: transform 0.15s;
 }
 
+/* 扩大连线感应区域：透明扩展层 + 提升 VueFlow connection-radius 配合 */
+.node-handle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+}
+
 .node-handle:hover {
   transform: scale(1.3);
 }
@@ -139,6 +213,24 @@ const isTerminal = computed(() => ['start', 'end'].includes(props.data?.stepType
 
 .node-handle-source {
   right: -6px !important;
+}
+
+/* 条件节点分支端口：垂直分布 + 分支标签 */
+.node-handle-branch {
+  transition: transform 0.15s;
+}
+
+.branch-handle-label {
+  position: absolute;
+  right: 18px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  line-height: 1;
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 /* 不同类型节点的颜色 */

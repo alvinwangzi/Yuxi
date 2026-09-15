@@ -117,14 +117,18 @@ After generation:
 - Reference images enhance generation quality significantly
 - Iterative refinement is normal for optimal results
 
-## Providers (Gemini / MiniMax)
+## Providers (Gemini / MiniMax / Volcengine)
 
 Auto-selected by environment variables (CLI unchanged):
 
 - `GEMINI_API_KEY` set → Gemini Veo (default, unchanged).
 - Only `MINIMAX_API_KEY` set → MiniMax video (`/v1/video_generation`, async 3-step poll/download).
-- Force with `VIDEO_GENERATION_PROVIDER=gemini|minimax`.
+- Only `ARK_API_KEY` set → Volcengine 方舟（C-Dance/即梦）。
+- Force with `VIDEO_GENERATION_PROVIDER=gemini|minimax|volcengine`.
 
 MiniMax overrides: `MINIMAX_API_HOST` (default `https://api.minimaxi.com`),
 `MINIMAX_VIDEO_MODEL` (default `MiniMax-Hailuo-2.3`). The first reference image is used
 as MiniMax `first_frame_image`. MiniMax ignores `--aspect-ratio` (it uses resolution/duration).
+
+Volcengine overrides: `ARK_BASE_URL` (default `https://ark.cn-beijing.volces.com/api/v3`),
+`VOLC_VIDEO_MODEL` (default `doubao-seaweed-t2v-pro-0801`).

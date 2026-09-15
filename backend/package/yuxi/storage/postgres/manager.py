@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 10
+BUSINESS_SCHEMA_VERSION = 13
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -1490,6 +1490,50 @@ class PostgresManager(metaclass=SingletonMeta):
                 deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 CONSTRAINT uq_role_template_deletions UNIQUE (role_key)
             )
+            """,
+            # ── v11: 个人 Skill 元数据入库 ──
+            "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS source_scope VARCHAR(32) NOT NULL DEFAULT 'shared'",
+            "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS owner_uid VARCHAR(64)",
+            "UPDATE skills SET source_scope = 'shared' WHERE source_scope IS NULL",
+            # 移除旧 slug 唯一约束与唯一索引，改用条件唯一索引
+            """
+            DO $$
+            DECLARE
+                constraint_name text;
+            BEGIN
+                SELECT conname INTO constraint_name
+                FROM pg_constraint
+                WHERE conrelid = 'skills'::regclass
+                  AND contype = 'u'
+                  AND conkey = (SELECT array_agg(attnum) FROM pg_attribute WHERE attrelid = 'skills'::regclass AND attname = 'slug');
+                IF constraint_name IS NOT NULL THEN
+                    EXECUTE format('ALTER TABLE skills DROP CONSTRAINT IF EXISTS %I', constraint_name);
+                END IF;
+            END $$;
+            """,
+            "DROP INDEX IF EXISTS ix_skills_slug",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_skills_shared_slug ON skills(slug) WHERE source_scope = 'shared'",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_skills_personal_slug_owner ON skills(slug, owner_uid) WHERE source_scope = 'personal'",
+            "CREATE INDEX IF NOT EXISTS ix_skills_source_scope ON skills(source_scope)",
+            "CREATE INDEX IF NOT EXISTS ix_skills_owner_uid ON skills(owner_uid)",
+            "ALTER TABLE IF EXISTS workflows ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES custom_categories(id) ON DELETE SET NULL",
+            "ALTER TABLE IF EXISTS workflows ADD COLUMN IF NOT EXISTS scope VARCHAR(20) NOT NULL DEFAULT 'personal'",
+            "ALTER TABLE IF EXISTS workflows ADD COLUMN IF NOT EXISTS department_id INTEGER",
+            "CREATE INDEX IF NOT EXISTS ix_workflows_category_id ON workflows(category_id)",
+            "CREATE INDEX IF NOT EXISTS ix_workflows_scope ON workflows(scope)",
+            # ── v13: workflow_step_runs 唯一约束（防止 ARQ 重试创建重复记录） ──
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'uq_workflow_step_runs_run_step'
+                      AND conrelid = 'workflow_step_runs'::regclass
+                ) THEN
+                    ALTER TABLE workflow_step_runs
+                    ADD CONSTRAINT uq_workflow_step_runs_run_step UNIQUE (workflow_run_id, step_id);
+                END IF;
+            END $$;
             """,
         ]
         async with self.async_engine.begin() as conn:

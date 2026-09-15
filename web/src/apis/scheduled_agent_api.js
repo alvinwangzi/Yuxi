@@ -1,6 +1,6 @@
 import { apiDelete, apiGet, apiPost, apiRequest } from './base'
 
-/** 用户 Agent 定时任务 API。 */
+/** 用户定时任务 API（支持 Agent 和工作流）。 */
 export const scheduledAgentApi = {
   list: () => apiGet('/api/scheduled-tasks'),
   create: (payload) => apiPost('/api/scheduled-tasks', payload),
@@ -11,5 +11,7 @@ export const scheduledAgentApi = {
     }),
   runNow: (jobId, requestId) =>
     apiPost(`/api/scheduled-tasks/${jobId}/run-now`, { request_id: requestId }),
-  remove: (jobId) => apiDelete(`/api/scheduled-tasks/${jobId}`)
+  remove: (jobId) => apiDelete(`/api/scheduled-tasks/${jobId}`),
+  // 获取可用的工作流列表
+  listWorkflows: () => apiGet('/api/workflows?limit=100')
 }

@@ -20,7 +20,7 @@ class OutputStepExecutor(BaseStepExecutor):
     不自造 PDF/Excel/IM 发送代码，复用已有工具。
     """
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         fmt = step_data.get("format", "markdown")
         template = step_data.get("template", "")
         delivery = step_data.get("delivery", [])

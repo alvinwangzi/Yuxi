@@ -16,7 +16,11 @@
         <a-tag v-if="isDirty" color="orange">未保存</a-tag>
       </div>
       <div class="toolbar-right">
-        <a-button @click="showRunModal = true" :disabled="isDirty || businessNodeCount === 0">
+        <a-button @click="openRunHistory">
+          <template #icon><History /></template>
+          运行历史
+        </a-button>
+        <a-button @click="handleRunClick" :disabled="businessNodeCount === 0 || running">
           <template #icon><Play /></template>
           运行
         </a-button>
@@ -36,6 +40,7 @@
           :default-viewport="{ zoom: 1, x: 0, y: 0 }"
           :min-zoom="0.2"
           :max-zoom="4"
+          :connection-radius="30"
           :delete-key-code="['Backspace', 'Delete']"
           @node-click="onNodeClick"
           @connect="onConnect"
@@ -76,16 +81,30 @@
           </div>
           <div class="settings-content">
             <div class="settings-row">
-              <span class="settings-label">并发度</span>
-              <a-input-number
-                v-model:value="concurrency"
-                :min="1"
-                :max="20"
-                style="width: 100%"
+              <span class="settings-label">全局变量</span>
+            </div>
+            <div v-for="(gv, idx) in globalVariables" :key="idx" class="global-var-item">
+              <a-input
+                v-model:value="gv.name"
+                placeholder="变量名"
+                size="small"
                 @change="markDirty"
               />
+              <a-input
+                v-model:value="gv.default"
+                placeholder="默认值"
+                size="small"
+                @change="markDirty"
+              />
+              <a-button size="small" type="text" danger @click="removeGlobalVariable(idx)">
+                <template #icon><Trash2 :size="12" /></template>
+              </a-button>
             </div>
-            <div class="panel-hint">点击画布上的「开始」节点编辑输入变量</div>
+            <div v-if="globalVariables.length === 0" class="panel-hint">暂无全局变量</div>
+            <a-button size="small" block @click="addGlobalVariable" style="margin-bottom: 12px;">
+              <template #icon><Plus :size="12" /></template>
+              添加变量
+            </a-button>
           </div>
         </div>
 
@@ -117,15 +136,13 @@
           </div>
           <div class="step-form" v-show="!stepPanelCollapsed">
             <a-form layout="vertical">
-              <a-form-item label="步骤 ID">
-                <a-input :value="selectedStep.id" disabled />
-              </a-form-item>
+              <div class="node-type-badge">
+                <component :is="getStepIcon(selectedStep.type)" :size="16" :stroke-width="1.5" />
+                <span>{{ allStepTypeLabels[selectedStep.type] || selectedStep.type }}</span>
+              </div>
 
               <!-- 开始步骤：编辑输入变量（保存到 definition.variables） -->
               <template v-if="selectedStep.type === 'start'">
-                <a-form-item label="名称">
-                  <a-input v-model:value="selectedStep.name" @change="onNameChange" />
-                </a-form-item>
                 <a-divider>输入变量</a-divider>
                 <div v-for="(v, idx) in variables" :key="idx" class="start-variable-item">
                   <a-input
@@ -155,9 +172,6 @@
 
               <!-- 结束步骤：编辑最终输出 -->
               <template v-else-if="selectedStep.type === 'end'">
-                <a-form-item label="名称">
-                  <a-input v-model:value="selectedStep.name" @change="onNameChange" />
-                </a-form-item>
                 <a-form-item label="输出格式">
                   <a-select
                     v-model:value="selectedStep.format"
@@ -170,12 +184,42 @@
                     <a-select-option value="json">JSON</a-select-option>
                   </a-select>
                 </a-form-item>
+
+                <!-- 可引用变量 -->
+                <div v-if="availableVariables.length > 0" class="var-panel">
+                  <div class="var-panel-title">可引用变量</div>
+                  <div v-for="group in availableVariables" :key="group.label" class="var-group">
+                    <div
+                      class="var-group-header"
+                      :class="{ 'var-group-expanded': expandedVarGroup === group.label }"
+                      @click="toggleVarGroup(group.label)"
+                    >
+                      <span class="var-group-arrow">{{ expandedVarGroup === group.label ? '▾' : '▸' }}</span>
+                      <span class="var-group-label">{{ group.label }}</span>
+                      <span class="var-group-count">{{ group.variables.length }}</span>
+                    </div>
+                    <div v-if="expandedVarGroup === group.label" class="var-group-body">
+                      <div
+                        v-for="v in group.variables"
+                        :key="v.name"
+                        class="var-tag"
+                        @click.stop="insertVariable(v.name)"
+                        :title="`点击插入 {{${v.name}}}`"
+                      >
+                        <span class="var-tag-name">{{ v.name }}</span>
+                        <span v-if="v.desc" class="var-tag-desc">{{ v.desc }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <a-form-item label="输出模板">
                   <a-textarea
                     v-model:value="selectedStep.template"
                     :rows="6"
                     placeholder="最终输出模板，可使用 {{变量名}}；留空则汇总上游 output_key 结果"
                     @change="markDirty"
+                    @focus="setActiveField('template')"
                   />
                 </a-form-item>
               </template>
@@ -185,38 +229,73 @@
                 <a-form-item label="名称">
                   <a-input v-model:value="selectedStep.name" @change="onNameChange" />
                 </a-form-item>
-                <a-form-item label="类型">
-                  <a-select v-model:value="selectedStep.type" @change="onTypeChange">
-                    <a-select-option v-for="(desc, type) in stepTypes" :key="type" :value="type">
-                      {{ desc }}
-                    </a-select-option>
-                  </a-select>
+
+                <!-- 引用 Agent：名称下方，搜索下拉选择 -->
+                <a-form-item v-if="selectedStep.type === 'llm'" label="引用 Agent（可选）">
+                  <a-select
+                    v-model:value="selectedStep.agent_slug"
+                    show-search
+                    allow-clear
+                    placeholder="搜索并选择 Agent，留空使用默认模型"
+                    :filter-option="agentFilterOption"
+                    :options="agentSelectOptions"
+                    @change="markDirty"
+                  />
                 </a-form-item>
+
+                <!-- 可用变量面板：先选节点，再展开该节点的变量 -->
+                <div v-if="availableVariables.length > 0" class="var-panel">
+                  <div class="var-panel-title">可引用变量</div>
+                  <div v-for="group in availableVariables" :key="group.label" class="var-group">
+                    <div
+                      class="var-group-header"
+                      :class="{ 'var-group-expanded': expandedVarGroup === group.label }"
+                      @click="toggleVarGroup(group.label)"
+                    >
+                      <span class="var-group-arrow">{{ expandedVarGroup === group.label ? '▾' : '▸' }}</span>
+                      <span class="var-group-label">{{ group.label }}</span>
+                      <span class="var-group-count">{{ group.variables.length }}</span>
+                    </div>
+                    <div v-if="expandedVarGroup === group.label" class="var-group-body">
+                      <div
+                        v-for="v in group.variables"
+                        :key="v.name"
+                        class="var-tag"
+                        @click.stop="insertVariable(v.name)"
+                        :title="`点击插入 {{${v.name}}}`"
+                      >
+                        <span class="var-tag-name">{{ v.name }}</span>
+                        <span v-if="v.desc" class="var-tag-desc">{{ v.desc }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 <!-- LLM 步骤特有字段 -->
                 <template v-if="selectedStep.type === 'llm'">
-                  <a-form-item label="Prompt">
-                    <a-textarea
-                      v-model:value="selectedStep.prompt"
-                      :rows="6"
-                      placeholder="输入 prompt，可使用 {{变量名}} 引用上下文变量"
-                      @change="markDirty"
-                    />
+                  <a-form-item :label="selectedStep.agent_slug ? '任务指令' : 'Prompt'">
+                    <div data-var-field="prompt">
+                      <a-textarea
+                        v-model:value="selectedStep.prompt"
+                        :rows="6"
+                        :placeholder="selectedStep.agent_slug
+                          ? '告诉 Agent 这一步要做什么，可使用 {{变量名}} 引用上游输出'
+                          : '输入 prompt，可使用 {{变量名}} 引用上下文变量'"
+                        @change="markDirty"
+                        @focus="setActiveField('prompt')"
+                      />
+                    </div>
                   </a-form-item>
-                  <a-form-item label="引用 Agent（可选）">
-                    <a-input
-                      v-model:value="selectedStep.agent_slug"
-                      placeholder="已有 agent 的 slug，留空使用默认模型"
-                      @change="markDirty"
-                    />
-                  </a-form-item>
-                  <a-form-item label="模型规格（可选）">
-                    <a-input
-                      v-model:value="selectedStep.model_spec"
-                      placeholder="如 deepseek/deepseek-chat；留空用系统默认"
-                      @change="markDirty"
-                    />
-                  </a-form-item>
+                  <template v-if="!selectedStep.agent_slug">
+                    <a-form-item label="模型规格（可选）">
+                      <a-input
+                        v-model:value="selectedStep.model_spec"
+                        placeholder="如 deepseek/deepseek-chat；留空用系统默认"
+                        @change="markDirty"
+                      />
+                    </a-form-item>
+                  </template>
+                  <div v-else class="panel-hint">已引用 Agent「{{ agentNameMap[selectedStep.agent_slug] || selectedStep.agent_slug }}」，角色设定、知识库和工具由 Agent 提供</div>
                 </template>
 
                 <!-- Tool 步骤特有字段 -->
@@ -241,7 +320,9 @@
                 <!-- HTTP 步骤特有字段 -->
                 <template v-if="selectedStep.type === 'http'">
                   <a-form-item label="URL">
-                    <a-input v-model:value="selectedStep.url" placeholder="https://..." @change="markDirty" />
+                    <div data-var-field="url">
+                      <a-input v-model:value="selectedStep.url" placeholder="https://..." @change="markDirty" @focus="setActiveField('url')" />
+                    </div>
                   </a-form-item>
                   <a-form-item label="Method">
                     <a-select v-model:value="selectedStep.method" @change="markDirty">
@@ -260,12 +341,15 @@
                     />
                   </a-form-item>
                   <a-form-item label="请求体 (JSON)">
-                    <a-textarea
-                      v-model:value="httpBodyText"
-                      :rows="4"
-                      placeholder='{"key": "{{变量名}}"}'
-                      @change="markDirty"
-                    />
+                    <div data-var-field="body">
+                      <a-textarea
+                        v-model:value="httpBodyText"
+                        :rows="4"
+                        placeholder='{"key": "{{变量名}}"}'
+                        @change="markDirty"
+                        @focus="setActiveField('body')"
+                      />
+                    </div>
                   </a-form-item>
                   <a-form-item label="超时（秒）">
                     <a-input-number
@@ -278,47 +362,53 @@
                   </a-form-item>
                 </template>
 
-                <!-- Condition 步骤特有字段 -->
+                <!-- Condition 步骤特有字段：多分支配置 -->
                 <template v-if="selectedStep.type === 'condition'">
-                  <a-form-item label="条件表达式">
+                  <a-form-item label="条件变量">
+                    <div data-var-field="condition">
+                      <a-input
+                        v-model:value="selectedStep.condition"
+                        placeholder="{{变量名}}"
+                        @change="markDirty"
+                        @focus="setActiveField('condition')"
+                      />
+                    </div>
+                  </a-form-item>
+                  <a-divider>分支列表</a-divider>
+                  <div
+                    v-for="(branch, idx) in selectedStep.branches"
+                    :key="branch.id"
+                    class="condition-branch-row"
+                  >
+                    <div class="condition-branch-header">
+                      <span class="condition-branch-dot" :style="{ background: branchColors[idx % branchColors.length] }"></span>
+                      <a-input
+                        :value="branch.label"
+                        placeholder="分支名称"
+                        class="condition-branch-name-input"
+                        @change="(e) => updateBranchLabel(branch.id, e.target.value)"
+                      />
+                      <a-button
+                        type="text"
+                        size="small"
+                        danger
+                        :disabled="selectedStep.branches.length <= 2"
+                        @click="removeBranch(branch.id)"
+                      >
+                        <template #icon><Trash2 :size="14" /></template>
+                      </a-button>
+                    </div>
                     <a-input
-                      v-model:value="selectedStep.condition"
-                      placeholder="{{变量}} == 'value'"
-                      @change="markDirty"
+                      :value="branch.match"
+                      placeholder="匹配值（留空则为默认分支）"
+                      class="condition-branch-match-input"
+                      @change="(e) => updateBranchMatch(branch.id, e.target.value)"
                     />
-                  </a-form-item>
-                  <a-form-item label="为真时走步骤">
-                    <a-select
-                      v-model:value="selectedStep.then_step"
-                      placeholder="选择条件为真时执行的步骤"
-                      allowClear
-                      @change="markDirty"
-                    >
-                      <a-select-option
-                        v-for="s in steps.filter(s => s.type !== 'start' && s.type !== 'end' && s.id !== selectedStep.id)"
-                        :key="s.id"
-                        :value="s.id"
-                      >
-                        {{ s.name || s.id }}
-                      </a-select-option>
-                    </a-select>
-                  </a-form-item>
-                  <a-form-item label="为假时走步骤">
-                    <a-select
-                      v-model:value="selectedStep.else_step"
-                      placeholder="选择条件为假时执行的步骤"
-                      allowClear
-                      @change="markDirty"
-                    >
-                      <a-select-option
-                        v-for="s in steps.filter(s => s.type !== 'start' && s.type !== 'end' && s.id !== selectedStep.id)"
-                        :key="s.id"
-                        :value="s.id"
-                      >
-                        {{ s.name || s.id }}
-                      </a-select-option>
-                    </a-select>
-                  </a-form-item>
+                  </div>
+                  <a-button type="dashed" block class="condition-add-branch-btn" @click="addBranch">
+                    <template #icon><Plus :size="14" /></template>
+                    添加分支
+                  </a-button>
                 </template>
 
                 <!-- Approval 步骤特有字段 -->
@@ -335,20 +425,72 @@
 
                 <!-- Script 步骤特有字段 -->
                 <template v-if="selectedStep.type === 'script'">
-                  <a-form-item label="语言">
-                    <a-select v-model:value="selectedStep.language" @change="markDirty" disabled>
-                      <a-select-option value="python">Python</a-select-option>
-                    </a-select>
-                  </a-form-item>
                   <a-form-item label="脚本代码">
-                    <a-textarea
-                      v-model:value="selectedStep.code"
-                      :rows="10"
-                      placeholder="# 可用 input_data 访问上下文变量&#10;result = input_data.get('key', '')"
-                      class="code-editor"
-                      @change="markDirty"
-                    />
+                    <a-tabs v-model:activeKey="scriptEditorTab" size="small" class="script-editor-tabs">
+                      <a-tab-pane key="ai" tab="AI 辅助">
+                        <div class="ai-code-gen-panel">
+                          <a-textarea
+                            v-model:value="aiPrompt"
+                            :rows="3"
+                            placeholder="描述你需要的脚本功能，例如：从 context 中读取 user_name，返回一个问候语对象"
+                          />
+                          <div class="ai-code-gen-actions">
+                            <a-button
+                              type="primary"
+                              size="small"
+                              :loading="aiGenerating"
+                              :disabled="!aiPrompt?.trim()"
+                              @click="generateAiCode"
+                            >
+                              生成代码
+                            </a-button>
+                            <span v-if="aiGenerating" class="ai-gen-hint">AI 正在生成...</span>
+                          </div>
+                          <div v-if="aiGeneratedCode" class="ai-generated-preview">
+                            <div class="ai-preview-header">
+                              <span>生成结果</span>
+                              <div>
+                                <a-button size="small" @click="aiGeneratedCode = ''">重新生成</a-button>
+                                <a-button type="primary" size="small" @click="applyAiCode">应用到编辑器</a-button>
+                              </div>
+                            </div>
+                            <pre class="ai-preview-code">{{ aiGeneratedCode }}</pre>
+                          </div>
+                        </div>
+                      </a-tab-pane>
+                      <a-tab-pane key="manual" tab="手写">
+                        <div data-var-field="code">
+                          <Codemirror
+                            :value="selectedStep.code"
+                            :extensions="cmExtensions"
+                            :style="{ height: '260px', fontSize: '13px' }"
+                            @change="(val) => { selectedStep.code = val; markDirty() }"
+                            @focus="setActiveField('code')"
+                          />
+                        </div>
+                      </a-tab-pane>
+                    </a-tabs>
                   </a-form-item>
+                  <a-form-item>
+                    <a-button
+                      type="primary"
+                      ghost
+                      :loading="scriptTesting"
+                      @click="testRunScript"
+                    >
+                      <template #icon><Play :size="14" /></template>
+                      模拟运行
+                    </a-button>
+                  </a-form-item>
+                  <div v-if="scriptTestResult !== null" class="script-test-result">
+                    <div class="script-test-result-header">
+                      <span>运行结果</span>
+                      <a-button type="text" size="small" @click="scriptTestResult = null">
+                        <template #icon><X :size="12" /></template>
+                      </a-button>
+                    </div>
+                    <pre :class="['script-test-output', { 'script-test-error': scriptTestError }]">{{ scriptTestResult }}</pre>
+                  </div>
                 </template>
 
                 <!-- Output 步骤特有字段 -->
@@ -361,12 +503,15 @@
                     </a-select>
                   </a-form-item>
                   <a-form-item label="模板">
-                    <a-textarea
-                      v-model:value="selectedStep.template"
-                      :rows="6"
-                      placeholder="输出模板，可使用 {{变量名}}"
-                      @change="markDirty"
-                    />
+                    <div data-var-field="template">
+                      <a-textarea
+                        v-model:value="selectedStep.template"
+                        :rows="6"
+                        placeholder="输出模板，可使用 {{变量名}}"
+                        @change="markDirty"
+                        @focus="setActiveField('template')"
+                      />
+                    </div>
                   </a-form-item>
                   <a-form-item label="交付渠道">
                     <a-select
@@ -393,41 +538,72 @@
                   />
                 </a-form-item>
 
-                <!-- 循环配置（仅业务步骤；start/end 是边界步骤不参与循环） -->
-                <template v-if="!isBoundaryNode(selectedStep.id)">
-                  <a-divider>循环配置（可选）</a-divider>
-                  <a-form-item label="循环回到步骤">
-                    <a-select
-                      :value="selectedStep.loop?.back_to"
-                      placeholder="选择要回到的步骤"
-                      allowClear
-                      @change="(val) => { selectedStep.loop = selectedStep.loop || {}; selectedStep.loop.back_to = val; markDirty() }"
-                    >
-                      <a-select-option
-                        v-for="s in steps.filter(s => s.id !== selectedStep.id && !isBoundaryNode(s.id))"
-                        :key="s.id"
-                        :value="s.id"
+                <!-- 循环配置（默认收起） -->
+                <div class="loop-config-section">
+                  <div class="loop-config-header" @click="loopConfigExpanded = !loopConfigExpanded">
+                    <span class="loop-config-arrow">{{ loopConfigExpanded ? '▾' : '▸' }}</span>
+                    <span>循环配置</span>
+                    <span v-if="selectedStep.loop" class="loop-config-badge">已配置</span>
+                  </div>
+                  <div v-if="loopConfigExpanded" class="loop-config-body">
+                    <a-form-item label="回退到步骤">
+                      <a-select
+                        v-model:value="selectedStep.loop.back_to"
+                        placeholder="选择循环回退的目标步骤"
+                        allow-clear
+                        @change="markDirty"
                       >
-                        {{ s.name || s.id }}
-                      </a-select-option>
-                    </a-select>
-                  </a-form-item>
-                  <a-form-item label="最大迭代次数">
-                    <a-input-number
-                      :value="selectedStep.loop?.max_iterations"
-                      :min="1"
-                      :max="100"
-                      @change="(val) => { selectedStep.loop = selectedStep.loop || {}; selectedStep.loop.max_iterations = val; markDirty() }"
-                    />
-                  </a-form-item>
-                  <a-form-item label="退出条件">
-                    <a-input
-                      :value="selectedStep.loop?.exit_condition"
-                      placeholder="{{变量}} contains 'done'"
-                      @change="(e) => { selectedStep.loop = selectedStep.loop || {}; selectedStep.loop.exit_condition = e.target.value; markDirty() }"
-                    />
-                  </a-form-item>
-                </template>
+                        <a-select-option
+                          v-for="s in steps.filter(s => s.id !== selectedStep.id && !isBoundaryNode(s.id))"
+                          :key="s.id"
+                          :value="s.id"
+                        >
+                          {{ s.name || s.id }}
+                        </a-select-option>
+                      </a-select>
+                    </a-form-item>
+                    <a-form-item label="最大循环次数">
+                      <a-input-number
+                        v-model:value="selectedStep.loop.max_iterations"
+                        :min="1"
+                        :max="20"
+                        placeholder="3"
+                        @change="markDirty"
+                      />
+                    </a-form-item>
+                    <a-form-item label="退出条件（可选）">
+                      <div data-var-field="exit_condition">
+                        <a-input
+                          v-model:value="selectedStep.loop.exit_condition"
+                          placeholder="如 {{review_result}} contains APPROVED"
+                          @change="markDirty"
+                          @focus="setActiveField('exit_condition')"
+                        />
+                      </div>
+                    </a-form-item>
+                    <a-button
+                      v-if="selectedStep.loop"
+                      type="text"
+                      size="small"
+                      danger
+                      @click="selectedStep.loop = null; markDirty()"
+                    >
+                      <template #icon><Trash2 :size="12" /></template>
+                      移除循环配置
+                    </a-button>
+                    <a-button
+                      v-else
+                      type="dashed"
+                      size="small"
+                      block
+                      @click="selectedStep.loop = { back_to: null, max_iterations: 3, exit_condition: null }; markDirty()"
+                    >
+                      <template #icon><Plus :size="12" /></template>
+                      添加循环配置
+                    </a-button>
+                  </div>
+                </div>
+
               </template>
             </a-form>
           </div>
@@ -465,6 +641,121 @@
         <div v-if="variables.length === 0">此工作流无输入变量</div>
       </a-form>
     </a-modal>
+
+    <!-- 运行历史弹窗 -->
+    <a-modal
+      v-model:open="showRunHistory"
+      title="运行历史"
+      :footer="null"
+      :width="640"
+    >
+      <div v-if="runHistoryLoading" style="text-align: center; padding: 24px;">
+        <a-spin tip="加载中..." />
+      </div>
+      <div v-else-if="runHistoryList.length === 0" style="text-align: center; padding: 24px; color: var(--gray-400);">
+        暂无运行记录
+      </div>
+      <div v-else class="run-history-list">
+        <div
+          v-for="run in runHistoryList"
+          :key="run.id"
+          class="run-history-item"
+          @click="viewRunDetail(run)"
+        >
+          <div class="run-history-item-main">
+            <a-tag :color="run.status === 'completed' ? 'green' : run.status === 'failed' ? 'red' : 'blue'" size="small">
+              {{ run.status }}
+            </a-tag>
+            <span class="run-history-time">{{ formatRunTime(run.created_at) }}</span>
+            <a-button
+              v-if="run.status === 'pending' || run.status === 'running'"
+              size="small"
+              danger
+              @click.stop="handleCancelRun(run.id)"
+              :loading="run._cancelling"
+            >
+              强制关闭
+            </a-button>
+          </div>
+          <div v-if="run.error_message" class="run-history-error">{{ run.error_message }}</div>
+        </div>
+      </div>
+    </a-modal>
+
+    <!-- 运行结果弹窗 -->
+    <a-modal
+      v-model:open="showRunResult"
+      title="运行结果"
+      :footer="null"
+      :width="672"
+      :body-style="{ maxHeight: '85vh', overflow: 'auto' }"
+      wrap-class-name="run-result-modal"
+      @cancel="onRunResultClose"
+    >
+      <div v-if="runResultData">
+        <div class="run-result-status">
+          <a-tag :color="runResultData.status === 'completed' ? 'green' : runResultData.status === 'failed' ? 'red' : 'blue'">
+            {{ runResultData.status === 'running' ? '执行中...' : runResultData.status === 'completed' ? '已完成' : runResultData.status === 'failed' ? '已失败' : runResultData.status }}
+          </a-tag>
+          <span v-if="runResultData.status === 'running' && runResultData.step_runs" class="run-result-progress">
+            步骤 {{ completedStepCount }}/{{ runResultData.step_runs.length }}
+          </span>
+          <span v-if="runResultData.error_message" class="run-result-error-msg">{{ runResultData.error_message }}</span>
+          <a-button
+            v-if="runResultData.status === 'pending' || runResultData.status === 'running'"
+            size="small"
+            danger
+            :loading="cancellingRun"
+            @click="handleCancelRun(runResultData.id)"
+            style="margin-left: auto;"
+          >
+            强制关闭
+          </a-button>
+        </div>
+        <!-- 步骤列表（实时显示已完成的步骤） -->
+        <div v-if="runResultData.step_runs && runResultData.step_runs.length > 0" class="run-result-steps">
+          <div
+            v-for="sr in runResultData.step_runs"
+            :key="sr.id"
+            :ref="el => setStepRef(el, sr.id)"
+            :class="['run-result-step', { 'run-result-step-active': getEffectiveStatus(sr) === 'running', 'run-result-step-done': getEffectiveStatus(sr) === 'completed', 'run-result-step-failed': getEffectiveStatus(sr) === 'failed' }]"
+          >
+            <div class="run-result-step-header">
+              <span class="run-result-step-icon">
+                <CheckCircleOutlined v-if="getEffectiveStatus(sr) === 'completed'" style="color: var(--success-500, #52c41a);" />
+                <CloseCircleOutlined v-else-if="getEffectiveStatus(sr) === 'failed'" style="color: var(--danger-500, #ef4444);" />
+                <LoadingOutlined v-else-if="getEffectiveStatus(sr) === 'running'" style="color: var(--primary-500, #1677ff);" />
+                <ClockCircleOutlined v-else style="color: var(--gray-400);" />
+              </span>
+              <a-tag :color="getEffectiveStatus(sr) === 'completed' ? 'green' : getEffectiveStatus(sr) === 'failed' ? 'red' : getEffectiveStatus(sr) === 'running' ? 'blue' : 'default'" size="small">
+                {{ getEffectiveStatus(sr) === 'completed' ? '已完成' : getEffectiveStatus(sr) === 'running' ? '执行中' : getEffectiveStatus(sr) === 'failed' ? '失败' : '等待中' }}
+              </a-tag>
+              <span class="run-result-step-name">{{ stepNameMap[sr.step_id] || sr.step_id }}</span>
+            </div>
+            <div v-if="hasStepOutput(sr)" class="run-result-step-output">
+              <pre>{{ formatRunOutput(sr.output_payload || sr.output) }}</pre>
+            </div>
+            <div v-if="sr.error_message" class="run-result-step-error">{{ sr.error_message }}</div>
+          </div>
+        </div>
+        <!-- 否则展示 context 中的变量 -->
+        <div v-else-if="runResultData.context && Object.keys(runResultData.context).length > 0">
+          <div class="run-result-context-title">输出变量</div>
+          <div v-for="(val, key) in runResultData.context" :key="key" class="run-result-step">
+            <div class="run-result-step-header">
+              <span class="run-result-step-name">{{ key }}</span>
+            </div>
+            <div class="run-result-step-output">
+              <pre>{{ formatRunOutput(val) }}</pre>
+            </div>
+          </div>
+        </div>
+        <div v-else style="text-align: center; padding: 16px; color: var(--gray-400);">等待执行...</div>
+      </div>
+      <div v-else style="text-align: center; padding: 24px;">
+        <a-spin tip="启动中..." />
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -476,16 +767,30 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import { ArrowLeft, Play, Save, Plus, Trash2, Inbox, Settings, X, ChevronLeft, ChevronRight } from '@lucide/vue'
-import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send } from '@lucide/vue'
+import { ArrowLeft, Play, Save, Plus, Trash2, Inbox, Settings, X, ChevronLeft, ChevronRight, History } from '@lucide/vue'
+import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Flag } from '@lucide/vue'
+import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons-vue'
 import WorkflowNode from '@/components/workflow/WorkflowNode.vue'
 import WorkflowEdge from '@/components/workflow/WorkflowEdge.vue'
 import { workflowApi } from '@/apis/workflow_api'
+import { agentApi } from '@/apis/agent_api'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
+import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import '@vue-flow/minimap/dist/style.css'
+
+// CodeMirror 6 代码编辑器
+import { Codemirror } from 'vue-codemirror'
+import { javascript } from '@codemirror/lang-javascript'
+import { oneDark } from '@codemirror/theme-one-dark'
+
+// CodeMirror 扩展配置
+const cmExtensions = [
+  javascript(),
+  oneDark,
+]
 
 const route = useRoute()
 const router = useRouter()
@@ -506,6 +811,29 @@ const showRunModal = ref(false)
 const runInputs = ref({})
 const showSettings = ref(false)
 const stepPanelCollapsed = ref(false)
+const loopConfigExpanded = ref(false)
+const agentOptions = ref([])
+const showRunResult = ref(false)
+const runResultLoading = ref(true)
+const runResultData = ref(null)
+let runPollTimer = null
+const showRunHistory = ref(false)
+const runHistoryLoading = ref(false)
+const runHistoryList = ref([])
+const cancellingRun = ref(false)
+const agentSelectOptions = computed(() =>
+  agentOptions.value.map(a => ({
+    value: a.slug,
+    label: `${a.name} (${a.slug})`
+  }))
+)
+const agentNameMap = computed(() => {
+  const map = {}
+  for (const a of agentOptions.value) {
+    map[a.slug] = a.name
+  }
+  return map
+})
 
 // Vue Flow 元素
 const flowElements = ref([])
@@ -531,14 +859,22 @@ const stepTypes = {
   output: '输出'
 }
 
+const allStepTypeLabels = {
+  start: '开始',
+  end: '结束',
+  ...stepTypes
+}
+
 const stepIcons = {
+  start: Play,
   llm: Bot,
   tool: Wrench,
   http: Globe,
   condition: GitBranch,
   approval: UserCheck,
   script: Code2,
-  output: Send
+  output: Send,
+  end: Flag
 }
 
 const getStepIcon = (type) => stepIcons[type] || Bot
@@ -549,17 +885,121 @@ function getStepDefaults(type) {
     case 'llm': return { prompt: '', agent_slug: '', model_spec: '' }
     case 'tool': return { tool_name: '', tool_params: {} }
     case 'http': return { url: '', method: 'GET', headers: {}, body: null, timeout: 30 }
-    case 'condition': return { condition: '', then_step: null, else_step: null }
+    case 'condition': return { condition: '', branches: [{ id: 'b1', label: '分支 1', match: '' }, { id: 'b2', label: '分支 2', match: '' }] }
     case 'approval': return { approval_prompt: '' }
-    case 'script': return { code: '', language: 'python' }
+    case 'script': return { code: 'function main(context) {\n  // context 包含上游节点的输出变量\n  // 返回结果会作为该节点的 output\n  return { result: "Hello from script" }\n}', language: 'javascript' }
     case 'output': return { format: 'markdown', template: '', delivery: [] }
     default: return {}
   }
 }
 
+// 条件分支颜色调色板（与 WorkflowNode.vue 保持一致）
+const branchColors = [
+  '#10b981', '#f59e0b', '#3b82f6', '#ef4444',
+  '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'
+]
+
+// 条件分支管理函数
+function addBranch() {
+  if (!selectedStep.value || selectedStep.value.type !== 'condition') return
+  if (!selectedStep.value.branches) selectedStep.value.branches = []
+  const idx = selectedStep.value.branches.length + 1
+  selectedStep.value.branches.push({
+    id: `b_${Date.now()}`,
+    label: `分支 ${idx}`,
+    match: ''
+  })
+  // 同步到画布节点 data，让 Handle 立即刷新
+  syncBranchesToNodeData(selectedStep.value.id, selectedStep.value.branches)
+  markDirty()
+}
+
+function removeBranch(branchId) {
+  if (!selectedStep.value || !selectedStep.value.branches) return
+  if (selectedStep.value.branches.length <= 2) return
+  selectedStep.value.branches = selectedStep.value.branches.filter(b => b.id !== branchId)
+  syncBranchesToNodeData(selectedStep.value.id, selectedStep.value.branches)
+  markDirty()
+}
+
+function updateBranchLabel(branchId, val) {
+  if (!selectedStep.value?.branches) return
+  const branch = selectedStep.value.branches.find(b => b.id === branchId)
+  if (branch) {
+    branch.label = val
+    syncBranchesToNodeData(selectedStep.value.id, selectedStep.value.branches)
+    markDirty()
+  }
+}
+
+function updateBranchMatch(branchId, val) {
+  if (!selectedStep.value?.branches) return
+  const branch = selectedStep.value.branches.find(b => b.id === branchId)
+  if (branch) {
+    branch.match = val
+    markDirty()
+  }
+}
+
+// 将分支数据同步到画布节点的 data.branches，使 WorkflowNode 的 Handle 即时刷新
+function syncBranchesToNodeData(stepId, branches) {
+  const node = flowElements.value.find(e => e.id === stepId && !e.source && !e.target)
+  if (node) {
+    node.data = { ...node.data, branches: [...branches] }
+  }
+}
+
 // 计算属性
 const steps = computed(() => workflow.value?.definition?.steps || [])
+// 步骤 ID → 中文名称映射（用于运行结果展示）
+const stepNameMap = computed(() => {
+  const map = {}
+  for (const s of steps.value) {
+    if (s?.id && s?.name) map[s.id] = s.name
+  }
+  return map
+})
+// 运行结果：已完成的步骤数（start 类型视为已完成）
+const completedStepCount = computed(() => {
+  if (!runResultData.value?.step_runs) return 0
+  return runResultData.value.step_runs.filter(sr => sr.status === 'completed' || sr.step_type === 'start').length
+})
+
+// 获取步骤的有效状态（start 类型直接视为已完成）
+function getEffectiveStatus(sr) {
+  if (sr.step_type === 'start') return 'completed'
+  return sr.status
+}
+// 判断步骤是否有有效输出（排除空对象 {}）
+function hasStepOutput(sr) {
+  const output = sr.output_payload || sr.output
+  if (!output) return false
+  if (typeof output === 'string') return output.trim() !== '' && output !== '{}'
+  if (typeof output === 'object') return Object.keys(output).length > 0
+  return true
+}
+// 步骤 DOM 引用（用于自动滚动）
+const stepRefs = {}
+function setStepRef(el, stepId) {
+  if (el) stepRefs[stepId] = el
+  else delete stepRefs[stepId]
+}
+// 自动滚动到当前执行的步骤
+function scrollToActiveStep() {
+  if (!runResultData.value?.step_runs) return
+  const activeStep = runResultData.value.step_runs.find(sr => sr.status === 'running')
+  if (activeStep && stepRefs[activeStep.step_id]) {
+    stepRefs[activeStep.step_id].scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
 const variables = computed(() => workflow.value?.definition?.variables || [])
+const globalVariables = computed(() => {
+  if (!workflow.value?.definition) return []
+  if (!workflow.value.definition.global_variables) {
+    workflow.value.definition.global_variables = []
+  }
+  return workflow.value.definition.global_variables
+})
 const concurrency = computed({
   get: () => workflow.value?.definition?.concurrency || 4,
   set: (val) => {
@@ -578,6 +1018,241 @@ const selectedStep = computed(() => {
   if (!selectedStepId.value) return null
   return steps.value.find(s => s.id === selectedStepId.value)
 })
+
+// 递归追溯当前节点的所有上游步骤（沿 depends_on 链路）
+function getUpstreamSteps(stepId, visited = new Set()) {
+  const result = []
+  const step = steps.value.find(s => s.id === stepId)
+  if (!step?.depends_on) return result
+  for (const depId of step.depends_on) {
+    if (visited.has(depId)) continue
+    visited.add(depId)
+    const dep = steps.value.find(s => s.id === depId)
+    if (dep && dep.type !== 'start' && dep.type !== 'end') {
+      result.push(dep)
+    }
+    result.push(...getUpstreamSteps(depId, visited))
+  }
+  return result
+}
+
+// 当前节点可用的变量：全局输入变量 + 所有上游节点的 output_key
+const availableVariables = computed(() => {
+  if (!selectedStep.value) return []
+  const groups = []
+
+  // 1. 工作流全局输入变量
+  if (variables.value.length > 0) {
+    groups.push({
+      label: '开始',
+      variables: variables.value.map(v => ({
+        name: typeof v === 'string' ? v : v.name,
+        desc: typeof v === 'string' ? '' : (v.description || v.default || '')
+      }))
+    })
+  }
+
+  // 1.5 全局变量（来自全局设置）
+  if (globalVariables.value.length > 0) {
+    groups.push({
+      label: '全局变量',
+      variables: globalVariables.value.map(v => ({
+        name: v.name,
+        desc: v.default || ''
+      }))
+    })
+  }
+
+  // 2. 上游节点的输出变量（递归追溯所有连线链路）
+  const upstream = getUpstreamSteps(selectedStep.value.id)
+  // 去重并保留有 output_key 的节点
+  const seen = new Set()
+  const upstreamVars = []
+  for (const step of upstream) {
+    if (seen.has(step.id)) continue
+    seen.add(step.id)
+    if (step.output_key) {
+      upstreamVars.push({
+        name: step.output_key,
+        desc: `${step.name || step.id} 的输出`,
+        stepName: step.name || step.id,
+        stepType: step.type
+      })
+    }
+  }
+
+  // 按步骤分组展示
+  const byStep = new Map()
+  for (const v of upstreamVars) {
+    if (!byStep.has(v.stepName)) {
+      byStep.set(v.stepName, { label: v.stepName, stepType: v.stepType, variables: [] })
+    }
+    byStep.get(v.stepName).variables.push({ name: v.name, desc: v.desc })
+  }
+  groups.push(...byStep.values())
+
+  return groups
+})
+
+// 当前焦点所在的文本字段（用于变量插入）
+const activeField = ref(null)
+
+// 脚本测试运行状态
+const scriptTesting = ref(false)
+const scriptTestResult = ref(null)
+const scriptTestError = ref(false)
+
+async function testRunScript() {
+  if (!selectedStep.value?.code) return
+  scriptTesting.value = true
+  scriptTestResult.value = null
+  scriptTestError.value = false
+  try {
+    // 收集上游变量作为测试上下文
+    const testContext = {}
+    const upstream = getUpstreamSteps(selectedStep.value.id)
+    for (const step of upstream) {
+      if (step.output_key) testContext[step.output_key] = `<${step.name} 模拟值>`
+    }
+    // 加入工作流全局变量
+    for (const v of variables.value) {
+      const name = typeof v === 'string' ? v : v.name
+      testContext[name] = `<${name} 模拟值>`
+    }
+    const res = await workflowApi.testScript(
+      selectedStep.value.code,
+      selectedStep.value.language || 'javascript',
+      testContext
+    )
+    if (res.data?.error) {
+      scriptTestError.value = true
+      scriptTestResult.value = res.data.error
+    } else {
+      scriptTestResult.value = JSON.stringify(res.data?.result, null, 2)
+    }
+  } catch (err) {
+    scriptTestError.value = true
+    scriptTestResult.value = err.message || '执行失败'
+  } finally {
+    scriptTesting.value = false
+  }
+}
+
+// 脚本编辑器 Tab 状态（手写 / AI 辅助）
+const scriptEditorTab = ref('ai')
+const aiPrompt = ref('')
+const aiGenerating = ref(false)
+const aiGeneratedCode = ref('')
+
+async function generateAiCode() {
+  if (!aiPrompt.value?.trim()) return
+  aiGenerating.value = true
+  aiGeneratedCode.value = ''
+  try {
+    // 收集可用变量信息作为上下文
+    const contextDesc = []
+    const upstream = getUpstreamSteps(selectedStep.value.id)
+    for (const step of upstream) {
+      if (step.output_key) contextDesc.push(`- context.${step.output_key}（${step.name} 的输出）`)
+    }
+    for (const v of variables.value) {
+      const name = typeof v === 'string' ? v : v.name
+      contextDesc.push(`- context.${name}（工作流变量）`)
+    }
+    const contextInfo = contextDesc.length > 0
+      ? `可用的上游变量：\n${contextDesc.join('\n')}`
+      : '当前没有上游变量，context 为空对象'
+
+    const prompt = `你是一个 JavaScript 脚本生成助手。请根据以下需求生成代码。\n\n要求：
+- 必须定义 function main(context) 函数
+- main 函数接收 context 对象，包含上游步骤的输出
+- 返回值会作为该步骤的输出
+- 只返回代码，不要多余解释
+
+${contextInfo}
+
+用户需求：${aiPrompt.value}`
+
+    const res = await agentApi.simpleCall(prompt)
+    // 提取代码块（去除可能的 markdown 代码围栏）
+    let code = res.response || ''
+    const fenceMatch = code.match(/```(?:javascript|js)?\s*\n?([\s\S]*?)```/)
+    if (fenceMatch) code = fenceMatch[1].trim()
+    aiGeneratedCode.value = code
+  } catch (err) {
+    aiGeneratedCode.value = `// 生成失败: ${err.message || '未知错误'}`
+  } finally {
+    aiGenerating.value = false
+  }
+}
+
+function applyAiCode() {
+  if (!aiGeneratedCode.value || !selectedStep.value) return
+  selectedStep.value.code = aiGeneratedCode.value
+  markDirty()
+  scriptEditorTab.value = 'manual'
+}
+
+// 当前展开的变量分组（同一时间只展开一个）
+const expandedVarGroup = ref(null)
+
+function toggleVarGroup(label) {
+  expandedVarGroup.value = expandedVarGroup.value === label ? null : label
+}
+
+function setActiveField(fieldName) {
+  activeField.value = fieldName
+}
+
+// 将 {{变量名}} 插入到当前焦点字段的光标位置
+function insertVariable(varName) {
+  if (!selectedStep.value || !activeField.value) return
+  const tag = `{{${varName}}}`
+  const field = activeField.value
+  const step = selectedStep.value
+
+  // 找到对应 DOM 元素并在光标处插入
+  const el = document.querySelector(`[data-var-field="${field}"] textarea, [data-var-field="${field}"] input`)
+  if (el) {
+    const start = el.selectionStart ?? el.value?.length ?? 0
+    const end = el.selectionEnd ?? start
+    const currentVal = el.value || ''
+    const newVal = currentVal.slice(0, start) + tag + currentVal.slice(end)
+
+    // 根据字段名写入对应的 step 属性
+    setStepFieldValue(step, field, newVal)
+    // 恢复光标位置
+    requestAnimationFrame(() => {
+      el.focus()
+      const pos = start + tag.length
+      el.setSelectionRange(pos, pos)
+    })
+  } else {
+    // 无焦点元素时追加到末尾
+    const currentVal = getStepFieldValue(step, field) || ''
+    setStepFieldValue(step, field, currentVal + tag)
+  }
+  markDirty()
+}
+
+function getStepFieldValue(step, field) {
+  const parts = field.split('.')
+  let obj = step
+  for (const p of parts) {
+    obj = obj?.[p]
+  }
+  return obj
+}
+
+function setStepFieldValue(step, field, val) {
+  const parts = field.split('.')
+  let obj = step
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!obj[parts[i]]) obj[parts[i]] = {}
+    obj = obj[parts[i]]
+  }
+  obj[parts[parts.length - 1]] = val
+}
 
 const toolParamsText = computed({
   get: () => {
@@ -631,6 +1306,26 @@ function syncFlowFromSteps() {
 
   const stepList = workflow.value.definition.steps
 
+  // 迁移旧版条件节点（then_step/else_step）到新版 branches
+  stepList.forEach(step => {
+    if (step.type === 'condition' && !step.branches) {
+      step.branches = []
+      if (step.then_step) {
+        step.branches.push({ id: 'b1', label: '为真', match: '' })
+      }
+      if (step.else_step) {
+        step.branches.push({ id: 'b2', label: '为假', match: '' })
+      }
+      // 如果旧数据两个都没配，给一个默认分支
+      if (step.branches.length === 0) {
+        step.branches.push({ id: 'b1', label: '分支 1', match: '' })
+      }
+      // 清理旧字段
+      delete step.then_step
+      delete step.else_step
+    }
+  })
+
   // 按 depends_on 拓扑分层：同层并排展示并发，跨层从左到右推进
   // start 固定为最左层（level -1），end 随其依赖自然落到最右
   const stepMap = new Map(stepList.map(s => [s.id, s]))
@@ -669,7 +1364,9 @@ function syncFlowFromSteps() {
         label: step.name || step.id,
         stepType: step.type,
         selected: selectedStepId.value === step.id,
-        stepId: step.id
+        stepId: step.id,
+        // 条件节点传递分支数据给 WorkflowNode 渲染动态 Handle
+        ...(step.type === 'condition' && step.branches ? { branches: step.branches } : {})
       }
     }
   })
@@ -729,6 +1426,8 @@ const onNodeClick = (event) => {
   const nodeId = event.node.id
   selectedStepId.value = nodeId
   stepPanelCollapsed.value = false
+  expandedVarGroup.value = null
+  loopConfigExpanded.value = false
   // 更新选中状态
   flowElements.value.forEach(el => {
     if (!el.source && !el.target) {
@@ -830,16 +1529,6 @@ const onDrop = (event) => {
   markDirty()
 }
 
-// 类型变更
-const onTypeChange = (newType) => {
-  // 更新节点图标
-  const node = flowElements.value.find(e => e.id === selectedStepId.value && !e.source && !e.target)
-  if (node) {
-    node.data = { ...node.data, stepType: newType }
-  }
-  markDirty()
-}
-
 // 名称编辑同步到画布节点（画布是主编辑入口，表单只做定点回写）
 const onNameChange = () => {
   const node = flowElements.value.find(e => e.id === selectedStepId.value && !e.source && !e.target)
@@ -874,6 +1563,13 @@ const loadWorkflow = async () => {
     }
     if (!workflow.value.definition.variables) {
       workflow.value.definition.variables = []
+    }
+    // 平台工作流的变量存储在开始节点内，同步到顶层 definition.variables
+    if (workflow.value.definition.variables.length === 0) {
+      const startStep = workflow.value.definition.steps.find(s => s.type === 'start')
+      if (startStep && startStep.variables && startStep.variables.length > 0) {
+        workflow.value.definition.variables = JSON.parse(JSON.stringify(startStep.variables))
+      }
     }
     // 旧版定义补齐 start/end 边界步骤并迁移连线；变化后提示保存固化
     if (ensureTerminalSteps()) {
@@ -923,6 +1619,8 @@ function ensureTerminalSteps() {
 
 const saveWorkflow = async () => {
   if (!workflow.value) return
+  // 保存前同步变量到开始节点（平台工作流变量存储在开始节点内）
+  syncVariablesToStartNode()
   saving.value = true
   try {
     await workflowApi.update(workflow.value.id, {
@@ -946,6 +1644,27 @@ const addVariable = () => {
 
 const removeVariable = (idx) => {
   workflow.value.definition.variables.splice(idx, 1)
+  markDirty()
+}
+
+// 将 definition.variables 同步回开始节点（平台工作流变量存储在开始节点内）
+const syncVariablesToStartNode = () => {
+  const startStep = workflow.value.definition.steps.find(s => s.type === 'start')
+  if (startStep) {
+    startStep.variables = JSON.parse(JSON.stringify(workflow.value.definition.variables || []))
+  }
+}
+
+const addGlobalVariable = () => {
+  if (!workflow.value.definition.global_variables) {
+    workflow.value.definition.global_variables = []
+  }
+  workflow.value.definition.global_variables.push({ name: '', default: '' })
+  markDirty()
+}
+
+const removeGlobalVariable = (idx) => {
+  workflow.value.definition.global_variables.splice(idx, 1)
   markDirty()
 }
 
@@ -997,23 +1716,200 @@ const getMiniMapColor = (node) => {
   return colors[node.data?.stepType] || '#14b8a6'
 }
 
+const handleRunClick = () => {
+  if (isDirty.value) {
+    Modal.confirm({
+      title: '工作流未保存',
+      content: '检测到工作流有未保存的修改，是否先保存再运行？',
+      okText: '保存并运行',
+      cancelText: '直接运行',
+      async onOk() {
+        await saveWorkflow()
+        showRunModal.value = true
+      },
+      onCancel() {
+        showRunModal.value = true
+      },
+    })
+  } else {
+    showRunModal.value = true
+  }
+}
+
 const handleRun = async () => {
   running.value = true
   try {
-    await workflowApi.run(workflow.value.id, runInputs.value)
-    message.success('工作流已提交运行')
+    const res = await workflowApi.run(workflow.value.id, runInputs.value)
+    const runData = res.data || res
     showRunModal.value = false
+    // 打开结果弹窗并开始轮询
+    showRunResult.value = true
+    runResultLoading.value = true
+    runResultData.value = null
+    pollRunResult(runData.id)
   } catch (error) {
     console.error('运行失败:', error)
-    message.error('运行失败')
+    // 409 = 已有正在运行的工作流，给出友好提示
+    if (error?.response?.status === 409) {
+      message.warning(error?.response?.data?.detail || '工作流正在运行中，请等待完成后再次提交')
+    } else {
+      message.error('运行失败')
+    }
   } finally {
     running.value = false
   }
 }
 
+const pollRunResult = async (runId) => {
+  if (runPollTimer) clearInterval(runPollTimer)
+
+  // 立即执行一次查询，避免首次显示全部"等待中"
+  const fetchRun = async () => {
+    try {
+      const res = await workflowApi.getRun(runId)
+      const data = res.data || res
+      runResultData.value = data
+      if (runResultLoading.value) {
+        runResultLoading.value = false
+      }
+      if (data.status === 'running') {
+        scrollToActiveStep()
+      }
+      if (data.status === 'completed' || data.status === 'failed') {
+        clearInterval(runPollTimer)
+        runPollTimer = null
+      }
+    } catch (e) {
+      console.error('查询运行结果失败:', e)
+      clearInterval(runPollTimer)
+      runPollTimer = null
+      runResultLoading.value = false
+    }
+  }
+
+  // 立即查询一次
+  await fetchRun()
+  // 然后每 2 秒轮询
+  runPollTimer = setInterval(fetchRun, 2000)
+}
+
+/** 关闭运行结果弹窗时清理轮询定时器（不影响后端异步执行） */
+function onRunResultClose() {
+  if (runPollTimer) {
+    clearInterval(runPollTimer)
+    runPollTimer = null
+  }
+}
+
+/** 强制终止卡住的工作流运行 */
+async function handleCancelRun(runId) {
+  Modal.confirm({
+    title: '确认强制关闭',
+    content: '确定要强制终止这个工作流运行吗？未完成的步骤将被标记为失败。',
+    okText: '确认关闭',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: async () => {
+      cancellingRun.value = true
+      try {
+        await workflowApi.cancelRun(runId)
+        message.success('工作流运行已强制关闭')
+        // 停止轮询
+        if (runPollTimer) {
+          clearInterval(runPollTimer)
+          runPollTimer = null
+        }
+        // 刷新运行详情
+        if (runResultData.value && runResultData.value.id === runId) {
+          const res = await workflowApi.getRun(runId)
+          runResultData.value = res.data || res
+        }
+        // 刷新运行历史
+        if (showRunHistory.value) {
+          const res = await workflowApi.listRuns(workflow.value.id)
+          runHistoryList.value = (res.data || res) || []
+        }
+        // 重置运行状态
+        running.value = false
+      } catch (e) {
+        console.error('强制关闭失败:', e)
+        if (e?.response?.status === 409) {
+          message.warning(e?.response?.data?.detail || '运行已终结，无法取消')
+        } else {
+          message.error('强制关闭失败')
+        }
+      } finally {
+        cancellingRun.value = false
+      }
+    },
+  })
+}
+
+function formatRunOutput(val) {
+  if (val === null || val === undefined) return ''
+  if (typeof val === 'string') return val
+  return JSON.stringify(val, null, 2)
+}
+
+const openRunHistory = async () => {
+  showRunHistory.value = true
+  runHistoryLoading.value = true
+  try {
+    const res = await workflowApi.listRuns(workflow.value.id)
+    runHistoryList.value = (res.data || res) || []
+  } catch (e) {
+    console.error('加载运行历史失败:', e)
+    message.error('加载运行历史失败')
+  } finally {
+    runHistoryLoading.value = false
+  }
+}
+
+const viewRunDetail = async (run) => {
+  showRunHistory.value = false
+  showRunResult.value = true
+  runResultLoading.value = true
+  runResultData.value = null
+  try {
+    const res = await workflowApi.getRun(run.id)
+    runResultData.value = res.data || res
+    runResultLoading.value = false
+  } catch (e) {
+    console.error('加载运行详情失败:', e)
+    message.error('加载运行详情失败')
+    runResultLoading.value = false
+  }
+}
+
+function formatRunTime(timeStr) {
+  if (!timeStr) return ''
+  const d = new Date(timeStr)
+  if (isNaN(d.getTime())) return timeStr
+  return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
 onMounted(() => {
   loadWorkflow()
+  loadAgents()
 })
+
+const loadAgents = async () => {
+  try {
+    const res = await agentApi.getAgents()
+    const list = res.agents || []
+    agentOptions.value = list.map(a => ({
+      slug: a.slug,
+      name: a.name || a.slug
+    }))
+  } catch (e) {
+    console.error('加载 Agent 列表失败:', e)
+  }
+}
+
+const agentFilterOption = (input, option) => {
+  const keyword = input.toLowerCase()
+  return (option?.label || '').toLowerCase().includes(keyword)
+}
 </script>
 
 <style scoped>
@@ -1105,7 +2001,7 @@ onMounted(() => {
 .floating-settings-btn {
   position: absolute;
   top: 12px;
-  right: 12px;
+  left: 12px;
   z-index: 20;
   width: 36px;
   height: 36px;
@@ -1235,10 +2131,171 @@ onMounted(() => {
   color: var(--gray-400);
 }
 
+.node-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gray-700);
+  background: var(--gray-100);
+  border-radius: 6px;
+}
+
+
+/* 可用变量面板 */
+.var-panel {
+  background: var(--gray-25);
+  border: 1px solid var(--gray-150);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+
+.var-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-500);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.var-group {
+  margin-bottom: 2px;
+}
+
+.var-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+  font-size: 11px;
+}
+
+.var-group-header:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.var-group-expanded {
+  background: rgba(20, 184, 166, 0.06);
+}
+
+.var-group-arrow {
+  font-size: 10px;
+  color: var(--gray-400);
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.var-group-label {
+  font-size: 11px;
+  color: var(--gray-600);
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.var-group-count {
+  font-size: 10px;
+  color: var(--gray-400);
+  background: var(--gray-100);
+  border-radius: 8px;
+  padding: 0 5px;
+  line-height: 16px;
+  flex-shrink: 0;
+}
+
+.var-group-body {
+  padding: 2px 0 4px 18px;
+}
+
+.var-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  margin: 0 4px 4px 0;
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.var-tag:hover {
+  border-color: #14b8a6;
+  color: #0d9488;
+  background: #f0fdfa;
+}
+
+.var-tag-name {
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+}
+
+.var-tag-desc {
+  color: var(--gray-400);
+  font-size: 10px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 条件分支表单行 */
+.condition-branch-row {
+  border: 1px solid var(--gray-150);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--gray-25);
+}
+
+.condition-branch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.condition-branch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.condition-branch-name-input {
+  flex: 1;
+  font-size: 12px;
+}
+
+.condition-branch-match-input {
+  font-size: 12px;
+}
+
+.condition-add-branch-btn {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
 /* 底部节点工具栏 */
 .node-palette-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   padding: 8px 16px;
   background: var(--gray-25);
@@ -1297,6 +2354,13 @@ onMounted(() => {
   align-items: center;
 }
 
+.global-var-item {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+  align-items: center;
+}
+
 .empty-variables {
   text-align: center;
   color: var(--gray-400);
@@ -1310,11 +2374,324 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+/* 循环配置区域 */
+.loop-config-section {
+  margin-top: 8px;
+}
+
+.loop-config-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-600);
+  user-select: none;
+
+  &:hover {
+    color: var(--gray-900);
+  }
+}
+
+.loop-config-arrow {
+  font-size: 12px;
+  width: 14px;
+  text-align: center;
+}
+
+.loop-config-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  margin-left: 4px;
+  border-radius: 9px;
+  background: var(--primary-1);
+  color: var(--primary-6);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.loop-config-body {
+  padding: 8px 0 4px;
+}
+
 /* 脚本代码编辑区 */
 .code-editor :deep(textarea) {
   font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.5;
   tab-size: 4;
+}
+
+/* CodeMirror 容器样式适配 */
+:deep(.cm-editor) {
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  outline: none;
+}
+
+:deep(.cm-editor.cm-focused) {
+  border-color: var(--primary-6);
+}
+
+/* 脚本测试结果面板 */
+.script-test-result {
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: -4px;
+}
+
+.script-test-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-150);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+}
+
+.script-test-output {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gray-700);
+  background: var(--gray-25);
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.script-test-error {
+  color: var(--danger-6);
+  background: var(--danger-50);
+}
+
+/* 脚本编辑器 Tab */
+.script-editor-tabs :deep(.ant-tabs-nav) {
+  margin-bottom: 8px;
+}
+
+.script-editor-tabs :deep(.ant-tabs-tab) {
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+/* AI 代码生成面板 */
+.ai-code-gen-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-code-gen-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-gen-hint {
+  font-size: 11px;
+  color: var(--primary-6);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.ai-generated-preview {
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ai-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-150);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+}
+
+.ai-preview-header div {
+  display: flex;
+  gap: 4px;
+}
+
+.ai-preview-code {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gray-700);
+  background: var(--gray-25);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 运行历史弹窗 */
+.run-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.run-history-item {
+  padding: 10px 14px;
+  border: 1px solid var(--gray-150);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.run-history-item:hover {
+  background: var(--gray-50);
+}
+
+.run-history-item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-history-time {
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.run-history-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--danger-500, #ef4444);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 运行结果弹窗 */
+.run-result-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.run-result-progress {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.run-result-error-msg {
+  font-size: 12px;
+  color: var(--danger-500, #ef4444);
+}
+
+.run-result-context-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-600);
+  margin-bottom: 10px;
+}
+
+.run-result-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.run-result-step {
+  border: 1px solid var(--gray-150);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--gray-25);
+  transition: all 0.3s ease;
+}
+
+.run-result-step-active {
+  border-color: var(--primary-300, #91caff);
+  background: var(--primary-25, #f0f5ff);
+  box-shadow: 0 0 0 2px var(--primary-100, #e6f4ff);
+}
+
+.run-result-step-done {
+  border-color: var(--success-200, #b7eb8f);
+  background: var(--success-25, #f6ffed);
+}
+
+.run-result-step-failed {
+  border-color: var(--danger-200, #ffa39e);
+  background: var(--danger-25, #fff2f0);
+}
+
+.run-result-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.run-result-step-icon {
+  display: flex;
+  align-items: center;
+  font-size: 16px;
+}
+
+.run-result-step-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-700);
+}
+
+.run-result-step-output pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gray-700);
+  background: #fff;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.run-result-step-error {
+  font-size: 12px;
+  color: var(--danger-500, #ef4444);
+  padding: 4px 0;
+}
+</style>
+
+<style>
+/* 运行结果弹窗 - 非 scoped 样式，因为 modal wrapper 渲染在 body 下 */
+.run-result-modal.ant-modal-wrap {
+  overflow: hidden !important;
+}
+
+.run-result-modal .ant-modal {
+  top: 5vh !important;
+  margin: 0 auto !important;
 }
 </style>

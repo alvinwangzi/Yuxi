@@ -840,20 +840,11 @@
 /* Category Tab Bar — shared across extension pages */
 .category-tab-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  padding: 8px var(--page-padding) 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  gap: 8px;
+  padding: 12px var(--page-padding) 0;
   flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background-color: var(--gray-0);
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
 
   .tab-item {
     display: inline-flex;

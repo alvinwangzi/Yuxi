@@ -24,6 +24,14 @@ class CategoryRepository:
     async def get_by_id(self, category_id: int) -> CustomCategory | None:
         return await self.db.get(CustomCategory, category_id)
 
+    async def get_by_slug(self, entity_type: str, slug: str) -> CustomCategory | None:
+        stmt = select(CustomCategory).where(
+            CustomCategory.entity_type == entity_type,
+            CustomCategory.slug == slug,
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         *,
@@ -59,13 +67,14 @@ class CategoryRepository:
 
     async def count_entities_for_category(self, category_id: int) -> dict[str, int]:
         """统计各实体类型下引用该分类的数量。"""
-        from yuxi.storage.postgres.models_business import Agent, Skill, RoleTemplate
+        from yuxi.storage.postgres.models_business import Agent, Skill, RoleTemplate, Workflow
 
         counts = {}
         for model, entity_type in [
             (Agent, "agent"),
             (Skill, "skill"),
             (RoleTemplate, "role_template"),
+            (Workflow, "workflow"),
         ]:
             if hasattr(model, "category_id"):
                 stmt = select(func.count()).select_from(model).where(model.category_id == category_id)

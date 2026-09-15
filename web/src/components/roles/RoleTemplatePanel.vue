@@ -4,6 +4,7 @@ import { message, Modal } from 'ant-design-vue'
 import { RefreshCw, Trash2, User } from '@lucide/vue'
 
 import { roleApi } from '@/apis/workflow_api'
+import PageShoulder from '@/components/shared/PageShoulder.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import ExtensionCardGrid from '@/components/extensions/ExtensionCardGrid.vue'
 import { useUserStore } from '@/stores/user'
@@ -43,6 +44,14 @@ const splitRoleKey = (roleKey) => {
 const popupStyle = computed(() => {
   if (!recategorizeState.anchorEl) return {}
   const rect = recategorizeState.anchorEl.getBoundingClientRect()
+  const popupMaxHeight = 300
+  const spaceBelow = window.innerHeight - rect.bottom - 4
+  if (spaceBelow < popupMaxHeight && rect.top - 4 > popupMaxHeight) {
+    return {
+      bottom: `${window.innerHeight - rect.top + 4}px`,
+      left: `${rect.left}px`,
+    }
+  }
   return {
     top: `${rect.bottom + 4}px`,
     left: `${rect.left}px`,
@@ -349,20 +358,16 @@ defineExpose({ loading })
           </span>
         </button>
       </div>
-      <button type="button" class="refresh-btn" @click="refresh" title="刷新">
-        <RefreshCw :size="14" :class="{ spin: refreshing }" />
-      </button>
     </div>
 
-    <!-- 搜索框 -->
-    <div class="search-bar">
-      <a-input
-        v-model:value="searchQuery"
-        placeholder="搜索角色名称或描述..."
-        allow-clear
-        class="search-input"
-      />
-    </div>
+    <!-- 搜索与操作栏 -->
+    <PageShoulder v-model:search="searchQuery" search-placeholder="搜索角色名称或描述...">
+      <template #actions>
+        <a-button class="lucide-icon-btn" @click="refresh" :loading="refreshing">
+          <RefreshCw :size="14" :class="{ spinning: refreshing }" />
+        </a-button>
+      </template>
+    </PageShoulder>
 
     <!-- 角色卡片网格 -->
     <ExtensionCardGrid :items="filteredRoles" empty-text="暂无匹配的角色模板" :min-width="280">
@@ -573,14 +578,6 @@ defineExpose({ loading })
   to { transform: rotate(360deg); }
 }
 
-.search-bar {
-  padding: 12px var(--page-padding);
-  flex-shrink: 0;
-
-  .search-input {
-    max-width: 360px;
-  }
-}
 
 .empty-state {
   grid-column: 1 / -1;

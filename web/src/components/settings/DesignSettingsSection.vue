@@ -3,7 +3,7 @@
     <div class="header-section">
       <div class="header-content">
         <div class="section-title">分类设置</div>
-        <p class="section-description">管理智能体、技能和角色模板的分类标签，可拖动调整顺序或点击名称编辑。</p>
+        <p class="section-description">管理智能体、技能、角色模板和工作流的分类标签，可拖动调整顺序或点击名称编辑。</p>
       </div>
     </div>
 
@@ -40,6 +40,19 @@
           v-model:new-slug="newRoleSlug"
           v-model:new-label="newRoleLabel"
           entity-type="role_template"
+          @save-edit="handleSaveEdit"
+          @add="handleAdd"
+          @delete="handleDelete"
+          @reorder="handleReorder"
+        />
+      </a-tab-pane>
+
+      <a-tab-pane key="workflow" tab="工作流分类">
+        <CategoryPanel
+          :categories="workflowCategories"
+          v-model:new-slug="newWorkflowSlug"
+          v-model:new-label="newWorkflowLabel"
+          entity-type="workflow"
           @save-edit="handleSaveEdit"
           @add="handleAdd"
           @delete="handleDelete"
@@ -84,9 +97,18 @@ const {
   reorderCategories: reorderRole,
 } = useCategories('role_template')
 
+const {
+  categories: workflowCategories,
+  loadCategories: loadWorkflow,
+  createCategory: createWorkflow,
+  updateCategory: updateWorkflow,
+  deleteCategory: deleteWorkflow,
+  reorderCategories: reorderWorkflow,
+} = useCategories('workflow')
+
 // ── 编辑 ──
 function getUpdater(entityType) {
-  return { agent: updateAgent, skill: updateSkill, role_template: updateRole }[entityType]
+  return { agent: updateAgent, skill: updateSkill, role_template: updateRole, workflow: updateWorkflow }[entityType]
 }
 
 async function handleSaveEdit(entityType, id, data) {
@@ -105,13 +127,15 @@ const newSkillSlug = ref('')
 const newSkillLabel = ref('')
 const newRoleSlug = ref('')
 const newRoleLabel = ref('')
+const newWorkflowSlug = ref('')
+const newWorkflowLabel = ref('')
 
 function getNewSlug(entityType) {
-  return { agent: newAgentSlug, skill: newSkillSlug, role_template: newRoleSlug }[entityType]
+  return { agent: newAgentSlug, skill: newSkillSlug, role_template: newRoleSlug, workflow: newWorkflowSlug }[entityType]
 }
 
 function getNewLabel(entityType) {
-  return { agent: newAgentLabel, skill: newSkillLabel, role_template: newRoleLabel }[entityType]
+  return { agent: newAgentLabel, skill: newSkillLabel, role_template: newRoleLabel, workflow: newWorkflowLabel }[entityType]
 }
 
 async function handleAdd(entityType) {
@@ -127,7 +151,7 @@ async function handleAdd(entityType) {
 
 // ── 删除 ──
 function getDeleter(entityType) {
-  return { agent: deleteAgent, skill: deleteSkill, role_template: deleteRole }[entityType]
+  return { agent: deleteAgent, skill: deleteSkill, role_template: deleteRole, workflow: deleteWorkflow }[entityType]
 }
 
 async function handleDelete(entityType, id) {
@@ -136,11 +160,11 @@ async function handleDelete(entityType, id) {
 
 // ── 排序 ──
 function getList(entityType) {
-  return { agent: agentCategories, skill: skillCategories, role_template: roleCategories }[entityType]
+  return { agent: agentCategories, skill: skillCategories, role_template: roleCategories, workflow: workflowCategories }[entityType]
 }
 
 function getReorderer(entityType) {
-  return { agent: reorderAgent, skill: reorderSkill, role_template: reorderRole }[entityType]
+  return { agent: reorderAgent, skill: reorderSkill, role_template: reorderRole, workflow: reorderWorkflow }[entityType]
 }
 
 async function handleReorder(entityType, fromIndex, toIndex) {
@@ -152,7 +176,7 @@ async function handleReorder(entityType, fromIndex, toIndex) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadAgent(), loadSkill(), loadRole()])
+  await Promise.all([loadAgent(), loadSkill(), loadRole(), loadWorkflow()])
 })
 </script>
 

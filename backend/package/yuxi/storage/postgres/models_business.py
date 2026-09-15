@@ -357,16 +357,21 @@ class Skill(Base):
     __tablename__ = "skills"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    slug = Column(String(128), nullable=False, unique=True, index=True, comment="技能唯一标识（目录名）")
+    slug = Column(String(128), nullable=False, index=True, comment="技能唯一标识（目录名）")
     name = Column(String(128), nullable=False, comment="技能名称（来自 SKILL.md frontmatter.name）")
     description = Column(Text, nullable=False, comment="技能描述（来自 SKILL.md frontmatter.description）")
     source_type = Column(
         String(32), nullable=False, default="upload", index=True, comment="来源: builtin/upload/remote"
     )
+    source_scope = Column(
+        String(32), nullable=False, default="shared", server_default="'shared'", index=True,
+        comment="范围: shared/personal"
+    )
+    owner_uid = Column(String(64), nullable=True, index=True, comment="个人 Skill 所属用户 uid")
     tool_dependencies = Column(JSON, nullable=False, default=list, comment="依赖的内置工具名列表")
     mcp_dependencies = Column(JSON, nullable=False, default=list, comment="依赖的 MCP 服务名列表")
     skill_dependencies = Column(JSON, nullable=False, default=list, comment="依赖的其他 skill slug 列表")
-    dir_path = Column(String(512), nullable=False, comment="共享技能目录路径（相对 Skill 数据根目录）")
+    dir_path = Column(String(512), nullable=False, comment="技能目录路径（相对对应根目录）")
     version = Column(String(64), nullable=True, comment="技能版本（内置 skill 使用语义化版本）")
     content_hash = Column(String(128), nullable=True, comment="技能目录内容哈希（内置 skill 安装时计算）")
     share_config = Column(JSON_VALUE, nullable=False, comment="共享权限配置")
@@ -384,6 +389,8 @@ class Skill(Base):
             "name": self.name,
             "description": self.description,
             "source_type": self.source_type,
+            "source_scope": self.source_scope or "shared",
+            "owner_uid": self.owner_uid,
             "tool_dependencies": self.tool_dependencies or [],
             "mcp_dependencies": self.mcp_dependencies or [],
             "skill_dependencies": self.skill_dependencies or [],
@@ -941,7 +948,7 @@ class TaskRecord(Base):
 
 
 class ScheduledAgentJob(Base):
-    """用户自建 Agent 定时任务。"""
+    """用户定时任务（支持 Agent 和工作流）。"""
 
     __tablename__ = "scheduled_agent_jobs"
     __table_args__ = (
@@ -960,6 +967,10 @@ class ScheduledAgentJob(Base):
             "tool_approval_mode IN ('default', 'always_trust')",
             name="ck_scheduled_agent_jobs_tool_approval_mode",
         ),
+        CheckConstraint(
+            "target_type IN ('agent', 'workflow')",
+            name="ck_scheduled_agent_jobs_target_type",
+        ),
     )
 
     id = Column(String(64), primary_key=True)
@@ -967,9 +978,11 @@ class ScheduledAgentJob(Base):
     creation_request_id = Column(String(64), nullable=False)
     creation_intent_hash = Column(String(64), nullable=False)
     project_id = Column(String(64), nullable=False, index=True)
-    agent_slug = Column(String(64), nullable=False)
+    target_type = Column(String(16), nullable=False, default="agent", comment="agent 或 workflow")
+    agent_slug = Column(String(64), nullable=True)  # target_type='agent' 时必填
+    workflow_id = Column(Integer, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
-    prompt = Column(Text, nullable=False)
+    prompt = Column(Text, nullable=True)  # target_type='agent' 时必填
     tool_approval_mode = Column(String(32), nullable=False, default="default")
     model_spec = Column(String(512), nullable=True)
     cron_expression = Column(String(100), nullable=False)
@@ -985,7 +998,9 @@ class ScheduledAgentJob(Base):
             "id": self.id,
             "uid": self.uid,
             "project_id": self.project_id,
+            "target_type": self.target_type,
             "agent_slug": self.agent_slug,
+            "workflow_id": self.workflow_id,
             "name": self.name,
             "prompt": self.prompt,
             "tool_approval_mode": self.tool_approval_mode,
@@ -1024,9 +1039,11 @@ class ScheduledAgentRun(Base):
     occurrence_key = Column(String(128), nullable=False)
     scheduled_for = Column(DateTime, nullable=False)
     project_id = Column(String(64), nullable=False)
-    agent_slug = Column(String(64), nullable=False)
+    target_type = Column(String(16), nullable=False, default="agent")
+    agent_slug = Column(String(64), nullable=True)
+    workflow_id = Column(Integer, nullable=True)
     conversation_title = Column(String(255), nullable=False)
-    prompt = Column(Text, nullable=False)
+    prompt = Column(Text, nullable=True)
     tool_approval_mode = Column(String(32), nullable=False)
     model_spec = Column(String(512), nullable=True)
     status = Column(String(32), nullable=False, default="dispatching")
@@ -1041,6 +1058,8 @@ class ScheduledAgentRun(Base):
             "thread_id": self.thread_id,
             "trigger": self.trigger,
             "scheduled_for": format_utc_datetime(self.scheduled_for),
+            "target_type": self.target_type,
+            "workflow_id": self.workflow_id,
             "status": self.status,
             "run_id": None,
             "error_message": self.error_message,
@@ -1469,11 +1488,24 @@ class Workflow(Base):
     created_by = Column(String(64), nullable=True, index=True)
     updated_by = Column(String(64), nullable=True)
     is_builtin = Column(Boolean, nullable=False, default=False)
+    category_id = Column(Integer, ForeignKey("custom_categories.id", ondelete="SET NULL"), nullable=True, index=True,
+                         comment="关联自定义分类 ID")
+    scope = Column(String(20), nullable=False, default="personal",
+                   comment="权限范围：company/department/personal")
+    department_id = Column(Integer, nullable=True,
+                           comment="部门级可见时绑定的部门 ID")
     created_at = Column(DateTime, default=utc_now_naive)
     updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     def to_dict(self) -> dict[str, Any]:
-        steps = (self.definition or {}).get("steps", [])
+        # definition 可能是 {"steps": [...]} 或扁平数组 [...]
+        raw_def = self.definition or {}
+        if isinstance(raw_def, list):
+            steps = raw_def
+        elif isinstance(raw_def, dict):
+            steps = raw_def.get("steps", [])
+        else:
+            steps = []
         return {
             "id": self.id,
             "slug": self.slug,
@@ -1485,6 +1517,9 @@ class Workflow(Base):
             "default_model_spec": self.default_model_spec,
             "step_count": len(steps),
             "is_builtin": bool(self.is_builtin),
+            "category_id": self.category_id,
+            "scope": self.scope or "personal",
+            "department_id": self.department_id,
             "created_by": self.created_by,
             "updated_by": self.updated_by,
             "created_at": format_utc_datetime(self.created_at),
@@ -1536,6 +1571,9 @@ class WorkflowStepRun(Base):
     """工作流步骤运行记录。"""
 
     __tablename__ = "workflow_step_runs"
+    __table_args__ = (
+        UniqueConstraint("workflow_run_id", "step_id", name="uq_workflow_step_runs_run_step"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)

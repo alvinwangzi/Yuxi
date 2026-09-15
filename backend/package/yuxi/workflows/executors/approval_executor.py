@@ -18,7 +18,7 @@ class ApprovalStepExecutor(BaseStepExecutor):
     4. 返回审批决策
     """
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         prompt = step_data.get("approval_prompt") or step_data.get("prompt", "请审批")
         step_id = step_data.get("id", "unknown")
 

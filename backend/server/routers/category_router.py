@@ -11,7 +11,7 @@ from yuxi.repositories.category_repository import CategoryRepository
 from yuxi.storage.postgres.models_business import User
 from yuxi.utils.logging_config import logger
 
-VALID_ENTITY_TYPES = {"agent", "skill", "role_template"}
+VALID_ENTITY_TYPES = {"agent", "skill", "role_template", "workflow"}
 
 router = APIRouter(prefix="/admin/categories", tags=["categories"])
 

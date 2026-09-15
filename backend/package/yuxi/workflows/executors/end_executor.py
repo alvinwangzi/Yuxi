@@ -16,7 +16,7 @@ from yuxi.workflows.template import resolve_template
 class EndStepExecutor(BaseStepExecutor):
     """输出出口步骤：渲染模板汇总最终输出。"""
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         template = step_data.get("template", "")
         fmt = step_data.get("format", "markdown")
 

@@ -15,11 +15,11 @@ for import_path in (APP_ROOT, APP_ROOT / "package"):
     if import_path_str not in sys.path:
         sys.path.insert(0, import_path_str)
 
-SUPERADMIN_UID = "zwj"
-SUPERADMIN_NAME = "张文杰"
-SUPERADMIN_PHONE_NUMBER = "15251638888"
-SUPERADMIN_PASSWORD = "zwj12138"
-DEFAULT_USER_PASSWORD = "yuxi123456"
+SUPERADMIN_UID = "alvin"
+SUPERADMIN_NAME = "Alvin"
+SUPERADMIN_PHONE_NUMBER = "13288888888"
+SUPERADMIN_PASSWORD = "12345678"
+DEFAULT_USER_PASSWORD = "maybly456"
 
 
 class DepartmentSeed(TypedDict):
@@ -138,7 +138,7 @@ def main() -> int:
         f"初始化完成：已创建超级管理员 {SUPERADMIN_NAME}（{SUPERADMIN_UID}）、"
         "3 个部门、6 个部门管理员和 14 个普通用户。"
     )
-    print("超级管理员密码：zwj12138")
+    print("超级管理员密码：maybly1@3")
     print("部门管理员和普通用户默认密码：maybly456")
     return 0
 

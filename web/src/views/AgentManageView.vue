@@ -1,12 +1,31 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import PageHeader from '@/components/shared/PageHeader.vue'
 import AgentManagePanel from '@/components/model-management/AgentManagePanel.vue'
+import RoleTemplatePanel from '@/components/roles/RoleTemplatePanel.vue'
+
+const route = useRoute()
+const router = useRouter()
 
 const agentPanelRef = ref(null)
-const activeLoading = computed(() => agentPanelRef.value?.loading || agentPanelRef.value?.saving || false)
+const rolePanelRef = ref(null)
+const activeLoading = computed(() => {
+  if (isRoleTab.value) return rolePanelRef.value?.loading || false
+  return agentPanelRef.value?.loading || agentPanelRef.value?.saving || false
+})
 const activeStats = computed(() => agentPanelRef.value?.stats || {})
+
+const isRoleTab = computed(() => route.path === '/agent-manage/roles')
+
+function switchTab(tab) {
+  if (tab === 'roles') {
+    router.replace('/agent-manage/roles')
+  } else {
+    router.replace('/agent-manage')
+  }
+}
 </script>
 
 <template>
@@ -27,8 +46,25 @@ const activeStats = computed(() => agentPanelRef.value?.stats || {})
     </PageHeader>
 
     <div class="agent-manage-content">
+      <div class="page-tabs">
+        <button
+          class="page-tab"
+          :class="{ active: !isRoleTab }"
+          @click="switchTab('agents')"
+        >
+          智能体
+        </button>
+        <button
+          class="page-tab"
+          :class="{ active: isRoleTab }"
+          @click="switchTab('roles')"
+        >
+          平台角色库
+        </button>
+      </div>
       <div class="tab-panel">
-        <AgentManagePanel ref="agentPanelRef" />
+        <AgentManagePanel v-if="!isRoleTab" ref="agentPanelRef" />
+        <RoleTemplatePanel v-else ref="rolePanelRef" />
       </div>
     </div>
   </div>
@@ -68,6 +104,35 @@ const activeStats = computed(() => agentPanelRef.value?.stats || {})
     color: var(--gray-700);
     font-size: 12px;
     line-height: 18px;
+  }
+}
+
+.page-tabs {
+  display: flex;
+  gap: 0;
+  padding: 12px 16px 0;
+  border-bottom: 1px solid var(--gray-150);
+}
+
+.page-tab {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  color: var(--gray-500);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.2s, border-color 0.2s;
+
+  &:hover {
+    color: var(--gray-800);
+  }
+
+  &.active {
+    color: var(--gray-1000);
+    border-bottom-color: var(--main-color);
   }
 }
 </style>

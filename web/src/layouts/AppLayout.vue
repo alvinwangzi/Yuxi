@@ -13,7 +13,6 @@ import {
   PanelLeftOpen,
   MessageCirclePlus,
   Search,
-  Users,
   Workflow
 } from '@lucide/vue'
 
@@ -159,16 +158,9 @@ const mainList = computed(() => {
   items.push({
     name: '智能体',
     path: '/agent-manage',
+    activePaths: ['/agent-manage', '/agent-manage/roles'],
     icon: Box,
     activeIcon: Box
-  })
-
-  items.push({
-    name: '定时任务',
-    path: '/scheduled-agents',
-    activePaths: ['/scheduled-agents'],
-    icon: ClipboardList,
-    activeIcon: ClipboardList
   })
 
   items.push({
@@ -180,19 +172,19 @@ const mainList = computed(() => {
   })
 
   items.push({
-    name: '角色模板',
-    path: '/roles',
-    activePaths: ['/roles'],
-    icon: Users,
-    activeIcon: Users
-  })
-
-  items.push({
     name: '技能 · 连接器',
     path: '/skills',
     activePaths: ['/skills'],
     icon: Puzzle,
     activeIcon: Puzzle
+  })
+
+  items.push({
+    name: '定时任务',
+    path: '/scheduled-agents',
+    activePaths: ['/scheduled-agents'],
+    icon: ClipboardList,
+    activeIcon: ClipboardList
   })
 
   items.push({

@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Collection
 from typing import Any, Literal
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.agents.context import AGENT_RUNTIME_RESOURCE_FIELDS
@@ -320,6 +320,43 @@ class AgentRepository:
         if user.role == "superadmin":
             return agents
         return [agent for agent in agents if user_can_access_agent(user, agent)]
+
+    async def list_visible_paginated(
+        self,
+        *,
+        user: User,
+        offset: int = 0,
+        limit: int = 50,
+        category_id: int | None = None,
+    ) -> tuple[list[Agent], int]:
+        """分页列出用户可见的主智能体（不含子智能体）。"""
+        base = select(Agent).where(Agent.is_subagent.is_(False))
+        count_base = select(func.count()).select_from(Agent).where(Agent.is_subagent.is_(False))
+
+        if category_id is not None:
+            base = base.where(Agent.category_id == category_id)
+            count_base = count_base.where(Agent.category_id == category_id)
+
+        total = (await self.db.execute(count_base)).scalar() or 0
+
+        stmt = base.order_by(Agent.is_default.desc(), Agent.id.asc()).offset(offset).limit(limit)
+        result = await self.db.execute(stmt)
+        agents = list(result.scalars().all())
+
+        if user.role == "superadmin":
+            return agents, total
+        filtered = [a for a in agents if user_can_access_agent(user, a)]
+        return filtered, total
+
+    async def get_agent_category_counts(self) -> dict[int, int]:
+        """按分类统计主智能体数量（不含子智能体）。"""
+        stmt = (
+            select(Agent.category_id, func.count())
+            .where(Agent.is_subagent.is_(False))
+            .group_by(Agent.category_id)
+        )
+        result = await self.db.execute(stmt)
+        return {row[0]: row[1] for row in result.fetchall()}
 
     async def list_visible_subagents(self, *, user: User) -> list[Agent]:
         result = await self.db.execute(

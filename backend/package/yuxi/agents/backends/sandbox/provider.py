@@ -198,10 +198,11 @@ class ProvisionerSandboxProvider:
 
             sandbox_id = sandbox_id_for_thread(thread_id, uid=uid)
             if create_if_missing:
-                from yuxi.models.providers.cache import resolve_image_gen_env
+                from yuxi.models.providers.cache import resolve_image_gen_env, resolve_video_gen_env
 
                 sandbox_env = load_user_agent_env(uid) if inherit_env else {}
                 sandbox_env.update(resolve_image_gen_env())
+                sandbox_env.update(resolve_video_gen_env())
                 record = self._client.create(
                     sandbox_id,
                     thread_id,

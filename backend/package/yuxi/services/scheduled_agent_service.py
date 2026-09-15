@@ -22,7 +22,7 @@ from yuxi.repositories.scheduled_agent_repository import ScheduledAgentRepositor
 from yuxi.services.input_message_service import build_chat_input_message
 from yuxi.services.run_submission_service import RunOrigin, RunSubmissionCommand, submit_run_command
 from yuxi.storage.postgres.manager import pg_manager
-from yuxi.storage.postgres.models_business import ScheduledAgentJob, ScheduledAgentRun, User
+from yuxi.storage.postgres.models_business import ScheduledAgentJob, ScheduledAgentRun, User, WorkflowRun
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
 from yuxi.utils.logging_config import logger
 
@@ -108,6 +108,19 @@ async def _validate_agent(agent_slug: str, user: User, db: AsyncSession):
     return agent
 
 
+async def _validate_workflow(workflow_id: int, user: User, db: AsyncSession):
+    """校验工作流存在且用户可访问。"""
+    from yuxi.repositories.workflow_repository import WorkflowRepository
+    repo = WorkflowRepository(db)
+    workflow = await repo.get_workflow(workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    # 检查权限：公开工作流或用户自己的
+    if workflow.scope != "public" and str(workflow.created_by) != str(user.uid):
+        raise HTTPException(status_code=403, detail="无权访问该工作流")
+    return workflow
+
+
 def _new_scheduled_run(
     *,
     job: ScheduledAgentJob,
@@ -128,7 +141,9 @@ def _new_scheduled_run(
         occurrence_key=occurrence_key,
         scheduled_for=scheduled_for,
         project_id=job.project_id,
+        target_type=job.target_type,
         agent_slug=job.agent_slug,
+        workflow_id=job.workflow_id,
         conversation_title=job.name,
         prompt=job.prompt,
         tool_approval_mode=job.tool_approval_mode,
@@ -197,9 +212,10 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
     repo = ScheduledAgentRepository(db)
     request_id = _normalize_request_id(data.get("request_id"))
     project_id = _normalize_text(data.get("project_id"), "project_id", 64)
-    agent_slug = _normalize_text(data.get("agent_slug"), "agent_slug", 64)
+    target_type = str(data.get("target_type") or "agent").strip()
+    if target_type not in ("agent", "workflow"):
+        raise HTTPException(status_code=422, detail="target_type 必须是 agent 或 workflow")
     name = _normalize_text(data.get("name"), "name", MAX_NAME_LENGTH)
-    prompt = _normalize_text(data.get("prompt"), "prompt", MAX_PROMPT_LENGTH)
     expression, timezone = validate_schedule(data.get("cron_expression"), data.get("timezone"))
     model_spec = str(data.get("model_spec") or "").strip() or None
     if model_spec and len(model_spec) > 512:
@@ -208,10 +224,25 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
         tool_approval_mode = normalize_tool_approval_mode(data.get("tool_approval_mode", "default"))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    # 根据 target_type 校验必填字段
+    agent_slug = None
+    workflow_id = None
+    prompt = None
+    if target_type == "agent":
+        agent_slug = _normalize_text(data.get("agent_slug"), "agent_slug", 64)
+        prompt = _normalize_text(data.get("prompt"), "prompt", MAX_PROMPT_LENGTH)
+    else:  # workflow
+        workflow_id = data.get("workflow_id")
+        if not workflow_id:
+            raise HTTPException(status_code=422, detail="工作流类型必须指定 workflow_id")
+
     intent_hash = _intent_hash(
         {
             "project_id": project_id,
+            "target_type": target_type,
             "agent_slug": agent_slug,
+            "workflow_id": workflow_id,
             "name": name,
             "prompt": prompt,
             "tool_approval_mode": tool_approval_mode,
@@ -228,7 +259,11 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
         return existing.to_dict()
 
     await _validate_project(project_id, user, db)
-    await _validate_agent(agent_slug, user, db)
+    if target_type == "agent":
+        await _validate_agent(agent_slug, user, db)
+    else:
+        await _validate_workflow(workflow_id, user, db)
+
     now = utc_now_naive()
     job = ScheduledAgentJob(
         id=str(uuid.uuid4()),
@@ -236,7 +271,9 @@ async def create_scheduled_job(*, user: User, db: AsyncSession, data: dict) -> d
         creation_request_id=request_id,
         creation_intent_hash=intent_hash,
         project_id=project_id,
+        target_type=target_type,
         agent_slug=agent_slug,
+        workflow_id=workflow_id,
         name=name,
         prompt=prompt,
         tool_approval_mode=tool_approval_mode,
@@ -272,14 +309,25 @@ async def update_scheduled_job(*, job_id: str, user: User, db: AsyncSession, dat
         project_id = _normalize_text(data["project_id"], "project_id", 64)
         await _validate_project(project_id, user, db)
         job.project_id = project_id
+    if "target_type" in data:
+        target_type = str(data["target_type"]).strip()
+        if target_type not in ("agent", "workflow"):
+            raise HTTPException(status_code=422, detail="target_type 必须是 agent 或 workflow")
+        job.target_type = target_type
     if "agent_slug" in data:
         agent_slug = _normalize_text(data["agent_slug"], "agent_slug", 64)
         await _validate_agent(agent_slug, user, db)
         job.agent_slug = agent_slug
+    if "workflow_id" in data:
+        workflow_id = data["workflow_id"]
+        if workflow_id:
+            await _validate_workflow(workflow_id, user, db)
+        job.workflow_id = workflow_id
     if "name" in data:
         job.name = _normalize_text(data["name"], "name", MAX_NAME_LENGTH)
     if "prompt" in data:
-        job.prompt = _normalize_text(data["prompt"], "prompt", MAX_PROMPT_LENGTH)
+        prompt = data["prompt"]
+        job.prompt = _normalize_text(prompt, "prompt", MAX_PROMPT_LENGTH) if prompt else None
     if "tool_approval_mode" in data:
         try:
             job.tool_approval_mode = normalize_tool_approval_mode(data["tool_approval_mode"])
@@ -394,7 +442,7 @@ async def _settle_dispatch_error(
 
 
 async def dispatch_scheduled_run(*, scheduled_run_id: str) -> dict | None:
-    """将持久触发意图幂等提交到统一 AgentRun 链路。"""
+    """将持久触发意图幂等提交到统一 AgentRun 或工作流执行链路。"""
     try:
         async with pg_manager.get_async_session_context() as db:
             scheduled_run = await db.scalar(
@@ -419,30 +467,38 @@ async def dispatch_scheduled_run(*, scheduled_run_id: str) -> dict | None:
                 await db.commit()
                 return scheduled_run.to_dict()
             await _validate_project(scheduled_run.project_id, user, db)
-            await _validate_agent(scheduled_run.agent_slug, user, db)
-            await submit_run_command(
-                command=RunSubmissionCommand(
-                    agent_slug=scheduled_run.agent_slug,
-                    thread_id=scheduled_run.thread_id,
-                    request_id=scheduled_run.request_id,
-                    input_message=build_chat_input_message(scheduled_run.prompt),
-                    origin=RunOrigin(
-                        source=SCHEDULED_AGENT_SOURCE,
-                        channel="worker",
-                        external_id=scheduled_run.id,
-                        metadata={"scheduled_job_id": job.id, "scheduled_run_id": scheduled_run.id},
+
+            # 根据 target_type 分发执行
+            if scheduled_run.target_type == "workflow":
+                # 工作流执行路径
+                await _dispatch_workflow_run(scheduled_run, job, user, db)
+            else:
+                # Agent 执行路径（原有逻辑）
+                await _validate_agent(scheduled_run.agent_slug, user, db)
+                await submit_run_command(
+                    command=RunSubmissionCommand(
+                        agent_slug=scheduled_run.agent_slug,
+                        thread_id=scheduled_run.thread_id,
+                        request_id=scheduled_run.request_id,
+                        input_message=build_chat_input_message(scheduled_run.prompt),
+                        origin=RunOrigin(
+                            source=SCHEDULED_AGENT_SOURCE,
+                            channel="worker",
+                            external_id=scheduled_run.id,
+                            metadata={"scheduled_job_id": job.id, "scheduled_run_id": scheduled_run.id},
+                        ),
+                        request_metadata={"scheduled_job_id": job.id, "scheduled_run_id": scheduled_run.id},
+                        tool_approval_mode=scheduled_run.tool_approval_mode,
+                        model_spec=scheduled_run.model_spec,
+                        queue_policy="enqueue",
+                        create_conversation=True,
+                        conversation_title=scheduled_run.conversation_title,
+                        conversation_project_id=scheduled_run.project_id,
                     ),
-                    request_metadata={"scheduled_job_id": job.id, "scheduled_run_id": scheduled_run.id},
-                    tool_approval_mode=scheduled_run.tool_approval_mode,
-                    model_spec=scheduled_run.model_spec,
-                    queue_policy="enqueue",
-                    create_conversation=True,
-                    conversation_title=scheduled_run.conversation_title,
-                    conversation_project_id=scheduled_run.project_id,
-                ),
-                current_user=user,
-                db=db,
-            )
+                    current_user=user,
+                    db=db,
+                )
+
             scheduled_run.status = "submitted"
             job.updated_at = utc_now_naive()
             await db.commit()
@@ -458,6 +514,36 @@ async def dispatch_scheduled_run(*, scheduled_run_id: str) -> dict | None:
         if settled is not None and settled["status"] == "submitted":
             return settled
         raise
+
+
+async def _dispatch_workflow_run(
+    scheduled_run: ScheduledAgentRun,
+    job: ScheduledAgentJob,
+    user: User,
+    db: AsyncSession,
+):
+    """执行工作流类型的定时任务。"""
+    from yuxi.repositories.workflow_repository import WorkflowRepository
+    from yuxi.services.workflow_service import submit_workflow_run
+
+    workflow_repo = WorkflowRepository(db)
+    workflow = await workflow_repo.get_workflow(scheduled_run.workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+
+    # 创建工作流运行记录
+    workflow_run = WorkflowRun(
+        workflow_id=workflow.id,
+        status="pending",
+        trigger="scheduled",
+        input_variables={},
+        context={},
+        created_by=str(user.uid),
+    )
+    workflow_run = await workflow_repo.create_run(workflow_run)
+
+    # 提交工作流执行
+    await submit_workflow_run(db, workflow_run.id)
 
 
 async def recover_scheduled_dispatches(*, limit: int = 100) -> int:

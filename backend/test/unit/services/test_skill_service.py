@@ -287,7 +287,7 @@ async def test_management_readable_skill_allows_manageable_disabled_and_enabled_
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str):
+        async def get_by_slug(self, slug: str, **_kw):
             assert slug == skill.slug
             return skill
 
@@ -317,7 +317,7 @@ async def test_management_readable_skill_allows_disabled_user_shared_manager(mon
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str):
+        async def get_by_slug(self, slug: str, **_kw):
             assert slug == skill.slug
             return skill
 
@@ -352,7 +352,7 @@ async def test_runtime_access_still_excludes_disabled_shared_skill(monkeypatch: 
 
     monkeypatch.setattr(svc, "SkillRepository", FakeRepo)
 
-    async def no_personal_skills(_uid):
+    async def no_personal_skills(_uid, *, db=None):
         return []
 
     monkeypatch.setattr(svc, "list_personal_skills", no_personal_skills)
@@ -1658,7 +1658,7 @@ async def test_init_builtin_skills_create_missing(tmp_path: Path, monkeypatch: p
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str):
+        async def get_by_slug(self, slug: str, **_kw):
             assert slug == "reporter"
             return None
 
@@ -1745,7 +1745,7 @@ async def test_init_builtin_skills_updates_existing_record_and_preserves_disable
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str):
+        async def get_by_slug(self, slug: str, **_kw):
             assert slug == "reporter"
             return existing_item
 
@@ -1845,7 +1845,7 @@ async def test_init_builtin_skills_rejects_non_builtin_conflict(tmp_path: Path, 
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str):
+        async def get_by_slug(self, slug: str, **_kw):
             return Skill(slug=slug, name=slug, description="uploaded", dir_path=f"shared/{slug}", source_type="upload")
 
     monkeypatch.setattr(svc, "SkillRepository", FakeRepo)
@@ -1959,7 +1959,7 @@ async def test_delete_skills_batch_ok(tmp_path: Path, monkeypatch: pytest.Monkey
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str, *, for_update: bool = False):
+        async def get_by_slug(self, slug: str, *, source_scope: str | None = None, for_update: bool = False):
             return db_items.get(slug)
 
         async def delete(self, item: Skill):
@@ -2017,7 +2017,7 @@ async def test_delete_skill_commits_database_before_removing_trash(tmp_path: Pat
         def __init__(self, _db):
             pass
 
-        async def get_by_slug(self, slug: str, *, for_update: bool = False):
+        async def get_by_slug(self, slug: str, *, source_scope: str | None = None, for_update: bool = False):
             assert slug == "concurrent-skill"
             assert for_update is True
             return item

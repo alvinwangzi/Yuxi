@@ -9,6 +9,7 @@ import {
   applyFrequencyChange,
   buildCronExpression,
   dayOptions,
+  intervalUnits,
   monthOptions,
   parseCronExpression,
   scheduleFrequencies,
@@ -18,6 +19,7 @@ import {
 const props = defineProps({
   job: { type: Object, default: null },
   agents: { type: Array, default: () => [] },
+  workflows: { type: Array, default: () => [] },
   saving: { type: Boolean, default: false },
   saveState: { type: String, default: 'idle' },
   error: { type: String, default: '' }
@@ -30,6 +32,13 @@ const defaultSchedule = {
   weekdays: [1],
   dayOfMonth: 1,
   month: 1,
+  intervalValue: 1,
+  intervalUnit: 'hour',
+  cronMinute: '0',
+  cronHour: '9',
+  cronDay: '*',
+  cronMonth: '*',
+  cronWeekday: '*',
   cronExpression: '0 9 * * *'
 }
 
@@ -39,14 +48,22 @@ const agentValues = computed(() =>
 
 function initialForm(job) {
   const schedule = job ? parseCronExpression(job.cron_expression) : defaultSchedule
+  const cronExpr = schedule?.cronExpression || buildCronExpression(schedule) || defaultSchedule.cronExpression
+  const cronParts = cronExpr.split(/\s+/)
   return {
     name: job?.name || '',
     prompt: job?.prompt || '',
     project_id: job?.project_id || '',
+    target_type: job?.target_type || 'agent',
     agent_slug: job?.agent_slug || agentValues.value[0] || '',
+    workflow_id: job?.workflow_id || '',
     ...schedule,
-    cronExpression:
-      schedule?.cronExpression || buildCronExpression(schedule) || defaultSchedule.cronExpression,
+    cronExpression: cronExpr,
+    cronMinute: cronParts[0] || '0',
+    cronHour: cronParts[1] || '9',
+    cronDay: cronParts[2] || '*',
+    cronMonth: cronParts[3] || '*',
+    cronWeekday: cronParts[4] || '*',
     model_spec: job?.model_spec || '',
     timezone: job?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
     tool_approval_mode: job?.tool_approval_mode || 'default'
@@ -75,35 +92,55 @@ const saveLabel = computed(() => {
 
 function validationMessage() {
   if (!form.name.trim()) return '请输入任务名称'
-  if (!form.prompt.trim()) return '请输入任务指令'
   if (!form.project_id || form.project_id === AUTO_PROJECT_ID) return '请选择一个 Project'
-  if (!form.agent_slug) return '请选择执行智能体'
+  // 根据 target_type 校验不同字段
+  if (form.target_type === 'workflow') {
+    if (!form.workflow_id) return '请选择要执行的工作流'
+  } else {
+    if (!form.prompt.trim()) return '请输入任务指令'
+    if (!form.agent_slug) return '请选择执行智能体'
+  }
   if (form.frequency === 'weekly' && !form.weekdays.length) return '请至少选择一个执行日'
-  if (form.frequency !== 'custom' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(form.time)) {
+  if (form.frequency === 'interval') {
+    const n = Number(form.intervalValue)
+    if (!n || n < 1) return '请输入有效的间隔数值'
+    if (form.intervalUnit !== 'minute' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(form.time)) {
+      return '请选择执行时间'
+    }
+  } else if (form.frequency !== 'custom' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(form.time)) {
     return '请选择执行时间'
   }
-  if (form.frequency === 'custom' && (form.cronExpression || '').trim().split(/\s+/).length !== 5) {
-    return '请输入有效的五段 Cron 表达式'
+  if (form.frequency === 'custom') {
+    const parts = [form.cronMinute, form.cronHour, form.cronDay, form.cronMonth, form.cronWeekday]
+    if (parts.some(p => !p || p.trim() === '')) return '请填写完整的 Cron 字段'
   }
   return ''
+}
+
+function buildCustomCron() {
+  return [form.cronMinute, form.cronHour, form.cronDay, form.cronMonth, form.cronWeekday].join(' ')
 }
 
 function changePayload() {
   const validationError = validationMessage()
   if (validationError) return { error: validationError, payload: null }
-  return {
-    error: '',
-    payload: {
-      name: form.name.trim(),
-      prompt: form.prompt.trim(),
-      project_id: form.project_id,
-      agent_slug: form.agent_slug,
-      cron_expression: buildCronExpression(form),
-      model_spec: form.model_spec,
-      timezone: form.timezone,
-      tool_approval_mode: form.tool_approval_mode
-    }
+  const payload = {
+    name: form.name.trim(),
+    project_id: form.project_id,
+    target_type: form.target_type,
+    cron_expression: form.frequency === 'custom' ? buildCustomCron() : buildCronExpression(form),
+    timezone: form.timezone
   }
+  // 根据 target_type 添加不同字段
+  if (form.target_type === 'workflow') {
+    payload.workflow_id = Number(form.workflow_id)
+  } else {
+    payload.prompt = form.prompt.trim()
+    payload.agent_slug = form.agent_slug
+    payload.model_spec = form.model_spec
+    payload.tool_approval_mode = form.tool_approval_mode
+  }
+  return { error: '', payload }
 }
 
 function toggleWeekday(day) {
@@ -159,7 +196,22 @@ function changeFrequency(frequency) {
       <span class="save-state" :class="saveState">{{ saveLabel }}</span>
     </div>
 
-    <label class="prompt-field">
+    <!-- 执行目标选择器 -->
+    <div class="target-type-selector">
+      <label class="target-type-option" :class="{ active: form.target_type === 'agent' }">
+        <input type="radio" v-model="form.target_type" value="agent" />
+        <span class="target-icon">🤖</span>
+        <span>智能体</span>
+      </label>
+      <label class="target-type-option" :class="{ active: form.target_type === 'workflow' }">
+        <input type="radio" v-model="form.target_type" value="workflow" />
+        <span class="target-icon">⚙️</span>
+        <span>工作流</span>
+      </label>
+    </div>
+
+    <!-- Agent 模式：显示 prompt 输入 -->
+    <label v-if="form.target_type === 'agent'" class="prompt-field">
       <span class="sr-only">任务指令</span>
       <textarea
         v-model="form.prompt"
@@ -174,8 +226,25 @@ function changeFrequency(frequency) {
     <section class="settings-section" aria-labelledby="context-settings-heading">
       <h3 id="context-settings-heading">详情</h3>
       <div class="settings-card">
-        <div class="setting-row">
-          <span>运行于</span>
+        <!-- 工作流模式：显示工作流选择器 -->
+        <div v-if="form.target_type === 'workflow'" class="setting-row">
+          <span>工作流</span>
+          <div class="setting-control">
+            <select v-model="form.workflow_id" :disabled="saving" aria-label="选择工作流">
+              <option value="" disabled>请选择工作流</option>
+              <option
+                v-for="wf in workflows"
+                :key="wf.id"
+                :value="wf.id"
+              >
+                {{ wf.name }}
+              </option>
+            </select>
+          </div>
+        </div>
+        <!-- Agent 模式：显示智能体选择器 -->
+        <div v-else class="setting-row">
+          <span>智能体</span>
           <div class="setting-control">
             <select v-model="form.agent_slug" :disabled="saving" aria-label="执行智能体">
               <option
@@ -200,27 +269,30 @@ function changeFrequency(frequency) {
             />
           </div>
         </div>
-        <div class="setting-row">
-          <span>模型</span>
-          <div class="setting-control">
-            <ModelSelectorComponent
-              :model_spec="form.model_spec"
-              clearable
-              size="nano"
-              display-name="mini"
-              placeholder="跟随智能体模型"
-              @select-model="(spec) => (form.model_spec = spec)"
-            />
+        <!-- 以下设置仅在 Agent 模式下显示 -->
+        <template v-if="form.target_type === 'agent'">
+          <div class="setting-row">
+            <span>模型</span>
+            <div class="setting-control">
+              <ModelSelectorComponent
+                :model_spec="form.model_spec"
+                clearable
+                size="nano"
+                display-name="mini"
+                placeholder="跟随智能体模型"
+                @select-model="(spec) => (form.model_spec = spec)"
+              />
+            </div>
           </div>
-        </div>
-        <div class="setting-row">
-          <span>工具审批</span>
-          <div class="setting-control">
-            <ToolApprovalModeSelector v-model="form.tool_approval_mode" />
+          <div class="setting-row">
+            <span>工具审批</span>
+            <div class="setting-control">
+              <ToolApprovalModeSelector v-model="form.tool_approval_mode" />
+            </div>
           </div>
-        </div>
+        </template>
       </div>
-      <p v-if="form.tool_approval_mode === 'always_trust'" class="trust-warning">
+      <p v-if="form.target_type === 'agent' && form.tool_approval_mode === 'always_trust'" class="trust-warning">
         允许敏感工具无人值守执行，仅用于可信的智能体和 Project。
       </p>
     </section>
@@ -279,15 +351,76 @@ function changeFrequency(frequency) {
             </select>
           </div>
         </div>
-        <label class="setting-row">
-          <span>{{ form.frequency === 'custom' ? 'Cron' : '时间' }}</span>
-          <input
-            v-if="form.frequency === 'custom'"
-            v-model="form.cronExpression"
-            aria-label="Cron 表达式"
-            placeholder="0 9 * * *"
-          />
-          <input v-else v-model="form.time" type="time" aria-label="执行时间" />
+        <!-- 间隔模式：每隔 X [单位] -->
+        <div v-if="form.frequency === 'interval'" class="setting-row interval-row">
+          <span>每隔</span>
+          <div class="interval-controls">
+            <input
+              v-model.number="form.intervalValue"
+              type="number"
+              min="1"
+              max="999"
+              class="interval-input"
+              aria-label="间隔数值"
+            />
+            <select v-model="form.intervalUnit" class="interval-unit-select" aria-label="间隔单位">
+              <option v-for="unit in intervalUnits" :key="unit.value" :value="unit.value">
+                {{ unit.label }}
+              </option>
+            </select>
+            <span class="interval-suffix">执行一次</span>
+          </div>
+        </div>
+        <!-- 间隔模式的小时/天需要设置基准时间 -->
+        <div v-if="form.frequency === 'interval' && form.intervalUnit !== 'minute'" class="setting-row">
+          <span>基准时间</span>
+          <input v-model="form.time" type="time" aria-label="基准执行时间" />
+        </div>
+        <!-- 自定义 Cron 表单 -->
+        <div v-if="form.frequency === 'custom'" class="custom-cron-section">
+          <div class="custom-cron-header">按字段设置执行时间</div>
+          <div class="custom-cron-grid">
+            <div class="cron-field">
+              <label>分钟</label>
+              <input v-model="form.cronMinute" placeholder="0" class="cron-input" />
+              <span class="cron-hint">0-59, 如 0,30</span>
+            </div>
+            <div class="cron-field">
+              <label>小时</label>
+              <input v-model="form.cronHour" placeholder="9" class="cron-input" />
+              <span class="cron-hint">0-23, 如 8,18</span>
+            </div>
+            <div class="cron-field">
+              <label>日</label>
+              <input v-model="form.cronDay" placeholder="*" class="cron-input" />
+              <span class="cron-hint">1-31 或 *</span>
+            </div>
+            <div class="cron-field">
+              <label>月</label>
+              <input v-model="form.cronMonth" placeholder="*" class="cron-input" />
+              <span class="cron-hint">1-12 或 *</span>
+            </div>
+            <div class="cron-field">
+              <label>星期</label>
+              <input v-model="form.cronWeekday" placeholder="*" class="cron-input" />
+              <span class="cron-hint">0-7 或 *</span>
+            </div>
+          </div>
+          <div class="custom-cron-preview">
+            <span class="preview-label">Cron 表达式：</span>
+            <code class="preview-value">{{ buildCustomCron() }}</code>
+          </div>
+          <div class="custom-cron-legend">
+            <span><code>*</code> = 每个（不限制）</span>
+            <span><code>8,18</code> = 多个值（8点 和 18点）</span>
+            <span><code>1-5</code> = 范围（1 到 5）</span>
+            <span><code>*/3</code> = 每隔（每 3 个）</span>
+          </div>
+        </div>
+        <!-- 其他频率的时间选择 -->
+        <label v-if="form.frequency !== 'interval' && form.frequency !== 'custom'" class="setting-row">
+          <span>时间</span>
+          <input v-model="form.time" type="time" aria-label="执行时间" />
         </label>
       </div>
     </section>
@@ -343,6 +476,46 @@ function changeFrequency(frequency) {
   &.error,
   &.invalid {
     color: var(--color-error-700);
+  }
+}
+
+.target-type-selector {
+  display: flex;
+  gap: 8px;
+  padding: 8px 22px;
+
+  .target-type-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: 1px solid var(--gray-200);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--gray-50);
+    font-size: 14px;
+    color: var(--gray-700);
+
+    input[type="radio"] {
+      display: none;
+    }
+
+    .target-icon {
+      font-size: 16px;
+    }
+
+    &:hover {
+      border-color: var(--primary-300);
+      background: var(--primary-50);
+    }
+
+    &.active {
+      border-color: var(--primary-500);
+      background: var(--primary-100);
+      color: var(--primary-700);
+      font-weight: 500;
+    }
   }
 }
 
@@ -526,6 +699,151 @@ function changeFrequency(frequency) {
       border-color: var(--gray-200);
       background: var(--gray-100);
       color: var(--gray-900);
+    }
+  }
+}
+
+.interval-row {
+  .interval-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .interval-input {
+    width: 64px;
+    padding: 4px 8px;
+    border: 1px solid var(--gray-200);
+    border-radius: 6px;
+    background: var(--gray-50);
+    color: var(--gray-900);
+    font: inherit;
+    font-size: 14px;
+    text-align: center;
+    outline: none;
+
+    &:focus {
+      border-color: var(--primary-500);
+      background: #fff;
+    }
+  }
+
+  .interval-unit-select {
+    padding: 4px 8px;
+    border: 1px solid var(--gray-200);
+    border-radius: 6px;
+    background: var(--gray-50);
+    color: var(--gray-900);
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+    cursor: pointer;
+
+    &:focus {
+      border-color: var(--primary-500);
+      background: #fff;
+    }
+  }
+
+  .interval-suffix {
+    color: var(--gray-500);
+    font-size: 14px;
+  }
+}
+
+.custom-cron-section {
+  padding: 12px 14px;
+  border-top: 1px solid var(--gray-100);
+
+  .custom-cron-header {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--gray-700);
+    margin-bottom: 12px;
+  }
+
+  .custom-cron-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+
+    .cron-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      label {
+        font-size: 12px;
+        color: var(--gray-500);
+        font-weight: 500;
+      }
+
+      .cron-input {
+        padding: 6px 8px;
+        border: 1px solid var(--gray-200);
+        border-radius: 6px;
+        background: var(--gray-50);
+        color: var(--gray-900);
+        font: inherit;
+        font-size: 14px;
+        text-align: center;
+        outline: none;
+        width: 100%;
+
+        &:focus {
+          border-color: var(--primary-500);
+          background: #fff;
+        }
+      }
+
+      .cron-hint {
+        font-size: 11px;
+        color: var(--gray-400);
+        text-align: center;
+      }
+    }
+  }
+
+  .custom-cron-preview {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: var(--gray-50);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .preview-label {
+      font-size: 12px;
+      color: var(--gray-500);
+    }
+
+    .preview-value {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 13px;
+      color: var(--primary-600);
+      background: #fff;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+  }
+
+  .custom-cron-legend {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--gray-500);
+
+    code {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+      font-size: 12px;
+      background: var(--gray-100);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--gray-700);
     }
   }
 }

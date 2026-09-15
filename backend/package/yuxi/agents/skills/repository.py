@@ -15,14 +15,36 @@ class SkillRepository:
         result = await self.db.execute(select(Skill).order_by(Skill.updated_at.desc(), Skill.id.desc()))
         return list(result.scalars().all())
 
+    async def list_by_owner(self, owner_uid: str) -> list[Skill]:
+        """查询指定用户的全部个人 Skill。"""
+        result = await self.db.execute(
+            select(Skill)
+            .where(Skill.source_scope == "personal", Skill.owner_uid == owner_uid)
+            .order_by(Skill.updated_at.desc(), Skill.id.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_by_slug_and_owner(self, slug: str, owner_uid: str) -> Skill | None:
+        """按 slug + 所属用户查找个人 Skill。"""
+        result = await self.db.execute(
+            select(Skill).where(
+                Skill.slug == slug,
+                Skill.source_scope == "personal",
+                Skill.owner_uid == owner_uid,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def list_enabled(self) -> list[Skill]:
         result = await self.db.execute(
             select(Skill).where(Skill.enabled.is_(True)).order_by(Skill.updated_at.desc(), Skill.id.desc())
         )
         return list(result.scalars().all())
 
-    async def get_by_slug(self, slug: str, *, for_update: bool = False) -> Skill | None:
+    async def get_by_slug(self, slug: str, *, source_scope: str | None = None, for_update: bool = False) -> Skill | None:
         stmt = select(Skill).where(Skill.slug == slug)
+        if source_scope is not None:
+            stmt = stmt.where(Skill.source_scope == source_scope)
         if for_update:
             stmt = stmt.with_for_update()
         result = await self.db.execute(stmt)
@@ -47,6 +69,8 @@ class SkillRepository:
         version: str | None = None,
         content_hash: str | None = None,
         created_by: str | None,
+        source_scope: str = "shared",
+        owner_uid: str | None = None,
     ) -> Skill:
         now = utc_now_naive()
         item = Skill(
@@ -54,6 +78,8 @@ class SkillRepository:
             name=name,
             description=description,
             source_type=source_type,
+            source_scope=source_scope,
+            owner_uid=owner_uid,
             tool_dependencies=tool_dependencies or [],
             mcp_dependencies=mcp_dependencies or [],
             skill_dependencies=skill_dependencies or [],
@@ -138,6 +164,14 @@ class SkillRepository:
 
     async def update_enabled(self, item: Skill, *, enabled: bool, updated_by: str | None) -> Skill:
         item.enabled = enabled
+        item.updated_by = updated_by
+        item.updated_at = utc_now_naive()
+        await self.db.flush()
+        await self.db.refresh(item)
+        return item
+
+    async def update_category(self, item: Skill, *, category_id: int | None, updated_by: str | None) -> Skill:
+        item.category_id = category_id
         item.updated_by = updated_by
         item.updated_at = utc_now_naive()
         await self.db.flush()

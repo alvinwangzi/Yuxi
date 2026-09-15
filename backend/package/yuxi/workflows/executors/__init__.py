@@ -12,12 +12,19 @@ class BaseStepExecutor(ABC):
     """步骤执行器基类。"""
 
     @abstractmethod
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(
+        self,
+        step_data: dict[str, Any],
+        context: dict[str, Any],
+        *,
+        db_session=None,
+    ) -> Any:
         """执行步骤，返回输出值。
 
         Args:
             step_data: 已解析变量后的步骤定义
             context: 运行时变量上下文
+            db_session: 数据库会话（可选，LLM Agent 模式需要）
         """
         ...
 

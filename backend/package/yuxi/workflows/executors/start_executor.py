@@ -15,5 +15,5 @@ from yuxi.workflows.executors import BaseStepExecutor
 class StartStepExecutor(BaseStepExecutor):
     """输入入口步骤：no-op，返回 None（变量已在 context 中）。"""
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         return None

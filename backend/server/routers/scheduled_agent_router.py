@@ -20,30 +20,47 @@ scheduled_agents = APIRouter(prefix="/scheduled-tasks", tags=["scheduled-tasks"]
 
 
 class ScheduledAgentCreate(BaseModel):
-    """创建定时 Agent 请求。"""
+    """创建定时任务请求（支持 Agent 和工作流）。"""
 
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(..., min_length=8, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
     name: str = Field(..., max_length=255)
     project_id: str = Field(..., max_length=64)
-    agent_slug: str = Field(..., max_length=64)
-    prompt: str = Field(..., max_length=32_000)
+    target_type: str = Field("agent", max_length=16, pattern=r"^(agent|workflow)$")
+    agent_slug: str | None = Field(None, max_length=64)
+    workflow_id: int | None = None
+    prompt: str | None = Field(None, max_length=32_000)
     cron_expression: str = Field(..., max_length=100)
     timezone: str = Field(..., max_length=64)
     tool_approval_mode: str = Field("default", max_length=32)
     model_spec: str | None = Field(None, max_length=512)
     enabled: bool = True
 
+    @field_validator("target_type")
+    @classmethod
+    def validate_target_type(cls, v, info):
+        return v
+
+    def model_post_init(self, __context):
+        if self.target_type == "agent" and not self.agent_slug:
+            raise ValueError("Agent 类型必须指定 agent_slug")
+        if self.target_type == "agent" and not self.prompt:
+            raise ValueError("Agent 类型必须指定 prompt")
+        if self.target_type == "workflow" and not self.workflow_id:
+            raise ValueError("工作流类型必须指定 workflow_id")
+
 
 class ScheduledAgentUpdate(BaseModel):
-    """更新定时 Agent 请求。"""
+    """更新定时任务请求。"""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(None, max_length=255)
     project_id: str | None = Field(None, max_length=64)
+    target_type: str | None = Field(None, max_length=16, pattern=r"^(agent|workflow)$")
     agent_slug: str | None = Field(None, max_length=64)
+    workflow_id: int | None = None
     prompt: str | None = Field(None, max_length=32_000)
     cron_expression: str | None = Field(None, max_length=100)
     timezone: str | None = Field(None, max_length=64)

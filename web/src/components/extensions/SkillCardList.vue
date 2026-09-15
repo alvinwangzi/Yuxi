@@ -128,11 +128,26 @@
                 :title="formatExtensionCardTitle(skill.name)"
                 :subtitle="skill.slug"
                 :description="skill.description || '暂无描述'"
-                :tags="skillCardTags(skill)"
                 :default-icon="getSkillIcon(skill.slug)"
                 @click="handleCardClick(skill)"
                 :class="{ 'card-clickable-select': isBatchDeleteMode }"
               >
+                <template #tags>
+                  <span
+                    v-if="skill.sourceScope !== 'personal'"
+                    class="card-tag tag-gray category-tag"
+                    :class="{ clickable: canManageSkill(skill) }"
+                    @click.stop="openRecategorize(skill, $event)"
+                  >
+                    {{ getSkillCategoryName(skill) }}
+                  </span>
+                  <span
+                    v-for="(tag, idx) in skillCardTags(skill)"
+                    :key="idx"
+                    class="card-tag"
+                    :class="tag.color ? `tag-${tag.color}` : ''"
+                  >{{ tag.name }}</span>
+                </template>
                 <template #actions>
                   <button
                     v-if="skill.sourceScope !== 'personal'"
@@ -512,11 +527,26 @@
         </div>
       </template>
     </SkillInstallFlowModal>
+
+    <Teleport to="body">
+      <div v-if="recategorizeState.visible" class="recategorize-popup" :style="recategorizePopupStyle">
+        <div class="popup-title">选择分类</div>
+        <div
+          v-for="cat in apiCategories"
+          :key="cat.id"
+          class="popup-item"
+          :class="{ active: recategorizeState.currentSkill?.resolvedCategoryId === cat.id }"
+          @click="selectRecategorizeCategory(cat.id)"
+        >
+          {{ cat.label }}
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message, Modal } from 'ant-design-vue'
 import {
@@ -898,6 +928,76 @@ const skillCardTags = (skill) => {
 }
 
 const canManageSkill = (skill) => skill?.can_manage !== false
+
+/** 重新分类弹窗状态 */
+const recategorizeState = reactive({
+  visible: false,
+  currentSkill: null,
+  anchorEl: null
+})
+
+const recategorizePopupStyle = computed(() => {
+  if (!recategorizeState.anchorEl) return {}
+  const rect = recategorizeState.anchorEl.getBoundingClientRect()
+  const popupMaxHeight = 300
+  const spaceBelow = window.innerHeight - rect.bottom - 4
+  if (spaceBelow < popupMaxHeight && rect.top - 4 > popupMaxHeight) {
+    return {
+      bottom: `${window.innerHeight - rect.top + 4}px`,
+      left: `${rect.left}px`
+    }
+  }
+  return {
+    top: `${rect.bottom + 4}px`,
+    left: `${rect.left}px`
+  }
+})
+
+/** 根据 resolvedCategoryId 查找分类显示名 */
+const getSkillCategoryName = (skill) => {
+  if (!skill.resolvedCategoryId) return '未分类'
+  const cat = apiCategories.value.find((c) => c.id === skill.resolvedCategoryId)
+  return cat?.label || '未分类'
+}
+
+const openRecategorize = (skill, event) => {
+  if (!canManageSkill(skill)) return
+  recategorizeState.currentSkill = skill
+  recategorizeState.visible = true
+  recategorizeState.anchorEl = event.currentTarget
+  loadCategories()
+}
+
+const closeRecategorize = () => {
+  recategorizeState.visible = false
+}
+
+const handleRecategorizeClickOutside = (e) => {
+  if (recategorizeState.visible && !e.target.closest('.recategorize-popup')) {
+    closeRecategorize()
+  }
+}
+
+const selectRecategorizeCategory = async (categoryId) => {
+  const skill = recategorizeState.currentSkill
+  if (!skill) return
+  try {
+    const res = await skillApi.updateSkillCategory(skill.slug, categoryId)
+    if (res?.success) {
+      message.success('分类已更新')
+      const idx = skills.value.findIndex((s) => s.slug === skill.slug)
+      if (idx > -1 && res.data) {
+        skills.value[idx] = res.data
+      }
+      await loadCategories(true)
+    }
+  } catch {
+    message.error('更新分类失败')
+  } finally {
+    closeRecategorize()
+  }
+}
+
 const isSkillToggling = (slug) => togglingSkillSlugs.value.includes(slug)
 const navigateToDetail = (skill) => {
   if (skill?.sourceScope === 'personal') return
@@ -1311,6 +1411,11 @@ onMounted(() => {
   fetchSkills()
   loadCategories()
   loadHistory()
+  document.addEventListener('click', handleRecategorizeClickOutside)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleRecategorizeClickOutside)
 })
 
 defineExpose({
@@ -1856,6 +1961,19 @@ defineExpose({
   margin-left: auto;
   gap: 8px;
 }
+
+.category-tag {
+  cursor: default;
+
+  &.clickable {
+    cursor: pointer;
+
+    &:hover {
+      background: var(--gray-200) !important;
+      color: var(--gray-800);
+    }
+  }
+}
 </style>
 
 <!-- NOTE: unscoped style block 用于 dropdown overlay 样式穿透 teleport -->
@@ -1943,6 +2061,45 @@ defineExpose({
   .clear-icon {
     display: flex;
     align-items: center;
+  }
+}
+
+.recategorize-popup {
+  position: fixed;
+  z-index: 1050;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--gray-200, #f0f0f0);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 8px 0;
+  min-width: 160px;
+  max-height: 300px;
+  overflow-y: auto;
+
+  .popup-title {
+    padding: 4px 14px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gray-400, #999);
+    line-height: 1;
+  }
+
+  .popup-item {
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--gray-700, #333);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    line-height: 1.4;
+
+    &:hover {
+      background: var(--gray-50, #fafafa);
+    }
+
+    &.active {
+      color: var(--main-600, #1677ff);
+      font-weight: 500;
+    }
   }
 }
 </style>

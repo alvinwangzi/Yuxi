@@ -42,6 +42,8 @@ from yuxi.agents.skills.service import (
 )
 from yuxi.permissions import resolve_skill_permission
 from yuxi.agents.skills.remote_install import list_remote_skills, search_remote_skills
+from yuxi.agents.skills.repository import SkillRepository
+from yuxi.repositories.category_repository import CategoryRepository
 from yuxi.storage.postgres.models_business import User
 from yuxi.utils.logging_config import logger
 
@@ -88,6 +90,10 @@ class RemoteSkillSearchRequest(BaseModel):
 
 class SkillBatchDeleteRequest(BaseModel):
     slugs: list[str] = Field(..., max_length=50, description="需要批量删除的 skill slug 列表，最多支持 50 个")
+
+
+class SkillCategoryUpdateRequest(BaseModel):
+    category_id: int = Field(..., description="目标分类 ID")
 
 
 class _DraftConfirmRequestBase(BaseModel):
@@ -258,12 +264,14 @@ async def confirm_personal_skill_install_draft_route(
     draft_id: str,
     payload: PersonalSkillDraftConfirmRequest,
     current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         results = await confirm_personal_skill_install_draft(
             draft_id=draft_id,
             slugs=payload.slugs,
             operator=current_user,
+            db=db,
         )
         return {"success": True, "data": results, "summary": _summarize_results(results)}
     except ValueError as e:
@@ -295,9 +303,10 @@ async def read_personal_skill_file_route(
 async def delete_personal_skill_route(
     slug: str,
     current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
-        await delete_personal_skill(str(current_user.uid), slug)
+        await delete_personal_skill(str(current_user.uid), slug, db=db)
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
@@ -380,6 +389,32 @@ async def sync_builtin_skills_route(
     except Exception as e:
         logger.error(f"Failed to sync builtin skills: {e}")
         raise HTTPException(status_code=500, detail="同步内置 skill 失败")
+
+
+@skills.put("/{slug}/category")
+async def update_skill_category_route(
+    slug: str,
+    payload: SkillCategoryUpdateRequest,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新技能所属分类（仅管理员）。"""
+    cat_repo = CategoryRepository(db)
+    category = await cat_repo.get_by_id(payload.category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="分类不存在")
+
+    repo = SkillRepository(db)
+    item = await repo.get_by_slug(slug, source_scope="shared")
+    if not item:
+        raise HTTPException(status_code=404, detail="技能不存在")
+
+    updated = await repo.update_category(item, category_id=payload.category_id, updated_by=str(current_user.uid))
+    await db.commit()
+
+    logger.info(f"已更新技能 {slug} 的分类为 {payload.category_id} (by admin {current_user.uid})")
+
+    return {"success": True, "data": _serialize_skill_for_user(updated, current_user)}
 
 
 @skills.put("/{slug}/share-config")

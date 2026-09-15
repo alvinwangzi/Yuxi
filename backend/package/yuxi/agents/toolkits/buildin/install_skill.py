@@ -116,54 +116,55 @@ async def _run_install_task(
         failed_items: list[dict] = []
         config_success = True
 
-        if source.startswith("/"):
-            with tempfile.TemporaryDirectory(prefix=".skill-install-") as tmp:
-                source_dir = await asyncio.to_thread(
-                    _prepare_skill_from_sandbox,
-                    source,
-                    thread_id,
-                    uid,
-                    Path(tmp),
-                    getattr(runtime_context, "workdir_relative_path", None),
-                    getattr(runtime_context, "workdir_path", None),
-                )
-                item = await install_personal_skill_dir(uid, source_dir)
-                installed_slugs = [item.slug]
-        else:
-            if not skill_names:
-                return Command(
-                    update={
-                        "messages": [
-                            ToolMessage(
-                                content="错误：从 Git 安装时必须通过 skill_names 指定技能名称",
-                                tool_call_id=tool_call_id,
-                            )
-                        ]
-                    }
-                )
+        async with pg_manager.get_async_session_context() as db:
+            if source.startswith("/"):
+                with tempfile.TemporaryDirectory(prefix=".skill-install-") as tmp:
+                    source_dir = await asyncio.to_thread(
+                        _prepare_skill_from_sandbox,
+                        source,
+                        thread_id,
+                        uid,
+                        Path(tmp),
+                        getattr(runtime_context, "workdir_relative_path", None),
+                        getattr(runtime_context, "workdir_path", None),
+                    )
+                    item = await install_personal_skill_dir(uid, source_dir, db=db)
+                    installed_slugs = [item.slug]
+            else:
+                if not skill_names:
+                    return Command(
+                        update={
+                            "messages": [
+                                ToolMessage(
+                                    content="错误：从 Git 安装时必须通过 skill_names 指定技能名称",
+                                    tool_call_id=tool_call_id,
+                                )
+                            ]
+                        }
+                    )
 
-            from yuxi.agents.skills.remote_install import prepare_remote_skills_batch
+                from yuxi.agents.skills.remote_install import prepare_remote_skills_batch
 
-            preparation = await prepare_remote_skills_batch(source=source, skills=skill_names)
-            try:
-                for result in preparation.results:
-                    if not result.get("success"):
-                        failed_items.append(result)
-                        continue
-                    try:
-                        item = await install_personal_skill_dir(uid, result["source_dir"])
-                        installed_slugs.append(item.slug)
-                    except Exception as e:
-                        failed_items.append({"slug": result["slug"], "success": False, "error": str(e)})
+                preparation = await prepare_remote_skills_batch(source=source, skills=skill_names)
+                try:
+                    for result in preparation.results:
+                        if not result.get("success"):
+                            failed_items.append(result)
+                            continue
+                        try:
+                            item = await install_personal_skill_dir(uid, result["source_dir"], db=db)
+                            installed_slugs.append(item.slug)
+                        except Exception as e:
+                            failed_items.append({"slug": result["slug"], "success": False, "error": str(e)})
 
-            finally:
-                await preparation.cleanup()
+                finally:
+                    await preparation.cleanup()
 
-        if installed_slugs:
-            async with pg_manager.get_async_session_context() as db:
+            if installed_slugs:
                 config_success = await enable_personal_skills_for_agent_config(
                     db, thread_id=thread_id, uid=uid, skill_slugs=installed_slugs
                 )
+            await db.commit()
 
         lines = []
         if installed_slugs:

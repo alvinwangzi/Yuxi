@@ -1,6 +1,7 @@
 <template>
   <div
     class="config-dropdown-panel attachment-options-panel"
+    :class="{ 'is-workspace-browsing': activeResourceType === 'workspace' }"
     role="menu"
     :aria-label="activeResourceType ? `${activeResourceLabel}选择` : '添加内容'"
     @click.stop
@@ -52,6 +53,81 @@
       </button>
     </template>
 
+    <template v-else-if="activeResourceType === 'workspace'">
+      <button
+        type="button"
+        class="attachment-options-back"
+        aria-label="返回添加内容菜单"
+        @click="closeWorkspaceBrowser"
+      >
+        <ArrowLeft :size="15" />
+        <span>{{ activeResourceLabel }}</span>
+      </button>
+
+      <div class="config-dropdown-divider"></div>
+
+      <!-- 面包屑导航 -->
+      <div class="workspace-breadcrumb" v-if="workspacePath !== '/'">
+        <button
+          type="button"
+          class="breadcrumb-item breadcrumb-root"
+          @click="navigateToPath('/')"
+          title="根目录"
+        >
+          <HardDrive :size="13" />
+        </button>
+        <template v-for="(segment, idx) in breadcrumbSegments" :key="idx">
+          <ChevronRight :size="12" class="breadcrumb-separator" />
+          <button
+            type="button"
+            class="breadcrumb-item"
+            :class="{ 'breadcrumb-current': idx === breadcrumbSegments.length - 1 }"
+            @click="navigateToBreadcrumb(idx)"
+            :title="segment"
+          >
+            {{ segment }}
+          </button>
+        </template>
+      </div>
+
+      <!-- 文件/文件夹列表 -->
+      <div class="workspace-file-list">
+        <div v-if="workspaceLoading" class="workspace-empty">
+          <span class="workspace-loading-spinner"></span>
+          <span>加载中...</span>
+        </div>
+        <div v-else-if="workspaceError" class="workspace-empty error-state">
+          <span>{{ workspaceError }}</span>
+          <a-button type="link" size="small" @click="loadWorkspaceEntries">重试</a-button>
+        </div>
+        <div v-else-if="!workspaceEntries.length" class="workspace-empty">
+          <span>目录为空</span>
+        </div>
+        <template v-else>
+          <button
+            v-for="entry in sortedWorkspaceEntries"
+            :key="entry.path"
+            type="button"
+            role="menuitem"
+            class="config-dropdown-item workspace-entry-item"
+            :class="{ 'is-dir': entry.is_dir }"
+            @click="handleWorkspaceEntryClick(entry)"
+          >
+            <FileTypeIcon
+              :name="entry.path"
+              :is-dir="entry.is_dir"
+              :size="15"
+              class="config-dropdown-item-icon"
+            />
+            <span class="config-dropdown-item-label workspace-entry-name" :title="entry.name">
+              {{ entry.name }}
+            </span>
+            <ChevronRight v-if="entry.is_dir" :size="13" class="attachment-options-chevron" />
+          </button>
+        </template>
+      </div>
+    </template>
+
     <template v-else>
       <button
         type="button"
@@ -93,16 +169,22 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import { ArrowLeft, ChevronRight, Database, FileText, Image, WandSparkles } from '@lucide/vue'
+import { computed, ref, watch } from 'vue'
+import { ArrowLeft, ChevronRight, Database, FileText, HardDrive, Image, WandSparkles } from '@lucide/vue'
 import { message } from 'ant-design-vue'
 import { uploadMultimodalImage } from '@/utils/multimodal_image_upload'
 import { getMentionIconComponent } from '@/utils/mention_icon_utils'
 import { buildMentionResourceItems } from '@/utils/mention_resource_items'
+import { formatMentionToken } from '@/utils/mention_token'
+import { getWorkspaceTree } from '@/apis/workspace_api'
+import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
+
+const VIRTUAL_PATH_PREFIX = '/home/gem/user-data'
 
 const RESOURCE_GROUPS = [
   { key: 'knowledgeBases', label: '知识库', icon: Database },
-  { key: 'skills', label: '技能', icon: WandSparkles }
+  { key: 'skills', label: '技能', icon: WandSparkles },
+  { key: 'workspace', label: '个人空间', icon: HardDrive }
 ]
 
 const props = defineProps({
@@ -124,13 +206,103 @@ const emit = defineEmits(['upload', 'upload-image', 'upload-image-success', 'sel
 const activeResourceType = ref('')
 const resourceItems = computed(() => buildMentionResourceItems(props.mention || {}))
 const visibleResourceGroups = computed(() =>
-  RESOURCE_GROUPS.filter((group) => resourceItems.value[group.key].length)
+  RESOURCE_GROUPS.filter((group) => {
+    if (group.key === 'workspace') return true
+    return resourceItems.value[group.key].length
+  })
 )
 const hasMentionResources = computed(() => visibleResourceGroups.value.length > 0)
 const activeResourceItems = computed(() => resourceItems.value[activeResourceType.value] || [])
 const activeResourceLabel = computed(
   () => RESOURCE_GROUPS.find((group) => group.key === activeResourceType.value)?.label ?? ''
 )
+
+// 个人空间浏览器状态
+const workspacePath = ref('/')
+const workspaceEntries = ref([])
+const workspaceLoading = ref(false)
+const workspaceError = ref('')
+
+const workspaceToRuntimePath = (workspacePath) => {
+  const clean = String(workspacePath || '/').replace(/^\/+/, '/')
+  if (clean === '/') return VIRTUAL_PATH_PREFIX
+  return `${VIRTUAL_PATH_PREFIX}${clean}`
+}
+
+const extractFileName = (path) => {
+  const clean = String(path || '').replace(/\/$/, '')
+  const lastSlash = clean.lastIndexOf('/')
+  return lastSlash >= 0 ? clean.substring(lastSlash + 1) : clean
+}
+
+const breadcrumbSegments = computed(() => {
+  if (workspacePath.value === '/') return []
+  return workspacePath.value.split('/').filter(Boolean)
+})
+
+const sortedWorkspaceEntries = computed(() => {
+  return [...workspaceEntries.value].sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+    return a.name.localeCompare(b.name, 'zh-Hans-CN')
+  })
+})
+
+const loadWorkspaceEntries = async () => {
+  workspaceLoading.value = true
+  workspaceError.value = ''
+  try {
+    const res = await getWorkspaceTree(workspacePath.value)
+    workspaceEntries.value = (res?.entries || []).map((entry) => ({
+      path: entry.path,
+      name: extractFileName(entry.path),
+      is_dir: Boolean(entry.is_dir)
+    }))
+  } catch (error) {
+    workspaceError.value = error?.message || '加载失败'
+    console.error('加载个人空间目录失败:', error)
+  } finally {
+    workspaceLoading.value = false
+  }
+}
+
+const navigateToPath = (path) => {
+  workspacePath.value = path
+  void loadWorkspaceEntries()
+}
+
+const navigateToBreadcrumb = (index) => {
+  const target = '/' + breadcrumbSegments.value.slice(0, index + 1).join('/')
+  navigateToPath(target)
+}
+
+const handleWorkspaceEntryClick = (entry) => {
+  if (entry.is_dir) {
+    navigateToPath(entry.path)
+  } else {
+    const runtimePath = workspaceToRuntimePath(entry.path)
+    const fileName = entry.name
+    selectMention({
+      value: runtimePath,
+      label: fileName,
+      type: 'file',
+      insertValue: runtimePath,
+      tokenLabel: formatMentionToken('file', fileName),
+      description: runtimePath
+    })
+  }
+}
+
+const closeWorkspaceBrowser = () => {
+  activeResourceType.value = ''
+  workspacePath.value = '/'
+  workspaceEntries.value = []
+}
+
+watch(activeResourceType, (newType) => {
+  if (newType === 'workspace') {
+    void loadWorkspaceEntries()
+  }
+})
 
 const handleAttachmentClick = () => {
   if (props.disabled) return
@@ -192,6 +364,10 @@ const processImageUpload = async (file) => {
 <style lang="less" scoped>
 .attachment-options-panel {
   width: 240px;
+
+  &.is-workspace-browsing {
+    width: 300px;
+  }
 }
 
 .attachment-options-chevron {
@@ -245,6 +421,116 @@ const processImageUpload = async (file) => {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-file-list {
+  max-height: min(360px, calc(100vh - 200px));
+  overflow-y: auto;
+}
+
+.workspace-entry-item {
+  gap: 8px;
+
+  &.is-dir {
+    .workspace-entry-name {
+      font-weight: 500;
+    }
+  }
+}
+
+.workspace-entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+  min-height: 28px;
+}
+
+.breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: var(--gray-100);
+    color: var(--gray-800);
+  }
+
+  &.breadcrumb-root {
+    padding: 2px 4px;
+    color: var(--main-500);
+
+    &:hover {
+      color: var(--main-600);
+    }
+  }
+
+  &.breadcrumb-current {
+    color: var(--gray-800);
+    font-weight: 500;
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+    }
+  }
+}
+
+.breadcrumb-separator {
+  color: var(--gray-300);
+  flex-shrink: 0;
+}
+
+.workspace-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px 12px;
+  color: var(--gray-400);
+  font-size: 13px;
+
+  &.error-state {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+.workspace-loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--gray-200);
+  border-top-color: var(--main-500);
+  border-radius: 50%;
+  animation: workspace-loading-spin 0.8s linear infinite;
+}
+
+@keyframes workspace-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 :deep(.config-dropdown-item:focus-visible) {

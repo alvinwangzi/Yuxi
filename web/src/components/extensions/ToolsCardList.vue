@@ -1,5 +1,8 @@
 <template>
   <div class="tools-cards-page extension-page-root">
+    <div class="builtin-hint-bar">
+      <span class="builtin-hint"> · 本页面展示系统内置工具，此类工具由专业人员维护。</span>
+    </div>
     <PageShoulder search-placeholder="搜索工具..." v-model:search="searchQuery">
       <template #actions>
         <a-tooltip title="刷新工具" placement="bottom">
@@ -9,20 +12,6 @@
         </a-tooltip>
       </template>
     </PageShoulder>
-
-    <div class="category-tab-bar">
-      <button
-        v-for="key in CATEGORIES"
-        :key="key"
-        type="button"
-        class="tab-item"
-        :class="{ active: selectedCategory === key }"
-        @click="selectedCategory = key"
-      >
-        {{ CATEGORY_LABELS[key] }}
-        <span v-if="categoryCounts[key]" class="tab-count">{{ categoryCounts[key] }}</span>
-      </button>
-    </div>
 
     <div v-if="filteredTools.length === 0" class="extension-card-grid-empty-state">
       <a-empty :image="false" :description="searchQuery ? '无匹配工具' : '暂无工具'" />
@@ -68,18 +57,6 @@
 
           <div class="detail-section">
             <div class="section-header">
-              <Tag :size="14" />
-              <span>分类</span>
-            </div>
-            <div class="section-content">
-              <a-tag color="blue">
-                {{ CATEGORY_LABELS[inferToolCategory(currentTool)] || '其他' }}
-              </a-tag>
-            </div>
-          </div>
-
-          <div class="detail-section">
-            <div class="section-header">
               <Tags :size="14" />
               <span>标签</span>
             </div>
@@ -114,20 +91,18 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { Wrench, RefreshCw, FileText, Tag, Tags, List } from '@lucide/vue'
+import { Wrench, RefreshCw, FileText, Tags, List } from '@lucide/vue'
 import { toolApi } from '@/apis/tool_api'
 import { getToolIcon } from '@/components/ToolCallingResult/toolRegistry'
 import ExtensionCardGrid from './ExtensionCardGrid.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import PageShoulder from '@/components/shared/PageShoulder.vue'
 import { formatExtensionCardTitle } from '@/utils/extensionDisplayName'
-import { CATEGORIES, CATEGORY_LABELS, inferToolCategory } from '@/utils/itemCategory'
 
 const WrenchIcon = Wrench
 
 const loading = ref(false)
 const searchQuery = ref('')
-const selectedCategory = ref('all')
 const tools = ref([])
 const currentTool = ref(null)
 const detailVisible = ref(false)
@@ -136,11 +111,7 @@ const getToolSlug = (tool) => tool?.slug || tool?.id || ''
 
 const toolTags = (tool) => {
   const tags = []
-  const cat = inferToolCategory(tool)
-  if (cat !== 'other') {
-    tags.push({ name: CATEGORY_LABELS[cat], color: 'blue' })
-  }
-  ;(tool.tags || []).slice(0, 2).forEach((t) => tags.push(t))
+  ;(tool.tags || []).slice(0, 3).forEach((t) => tags.push(t))
   return tags
 }
 
@@ -151,33 +122,15 @@ const argColumns = [
 ]
 
 const filteredTools = computed(() => {
-  let result = tools.value.map((t) => ({
-    ...t,
-    category: inferToolCategory(t)
-  }))
-  if (selectedCategory.value !== 'all') {
-    result = result.filter((t) => t.category === selectedCategory.value)
-  }
-  if (searchQuery.value) {
-    const q = searchQuery.value.toLowerCase()
-    result = result.filter(
-      (t) =>
-        t.name.toLowerCase().includes(q) ||
-        getToolSlug(t).toLowerCase().includes(q) ||
-        t.description?.toLowerCase().includes(q) ||
-        t.config_guide?.toLowerCase().includes(q)
-    )
-  }
-  return result
-})
-const categoryCounts = computed(() => {
-  const allTools = tools.value.map((t) => ({ ...t, category: inferToolCategory(t) }))
-  const counts = { all: allTools.length }
-  for (const key of CATEGORIES) {
-    if (key === 'all') continue
-    counts[key] = allTools.filter((t) => t.category === key).length
-  }
-  return counts
+  if (!searchQuery.value) return tools.value
+  const q = searchQuery.value.toLowerCase()
+  return tools.value.filter(
+    (t) =>
+      t.name.toLowerCase().includes(q) ||
+      getToolSlug(t).toLowerCase().includes(q) ||
+      t.description?.toLowerCase().includes(q) ||
+      t.config_guide?.toLowerCase().includes(q)
+  )
 })
 
 const selectTool = (tool) => {
@@ -204,6 +157,20 @@ defineExpose({ fetchTools, loading })
 
 <style lang="less" scoped>
 @import '@/assets/css/extensions.less';
+
+.builtin-hint-bar {
+  padding: 12px var(--page-padding) 0;
+}
+
+.builtin-hint {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--gray-100);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-600);
+}
 
 .tool-detail-content {
   max-height: 70vh;

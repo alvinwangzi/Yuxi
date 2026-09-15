@@ -125,7 +125,7 @@ async def main() -> None:
                 "business",
                 business_version,
                 BUSINESS_SCHEMA_VERSION,
-                upgrade_from=(2, 7, 8, 9),
+                upgrade_from=(2, 7, 8, 9, 10, 11, 12),
             )
             knowledge_version = versions.get("knowledge")
             _require_supported_version(
@@ -149,15 +149,16 @@ async def main() -> None:
                 await pg_manager.ensure_business_schema()
                 if business_version is None:
                     await pg_manager.setup_langgraph_checkpointer()
-                await pg_manager.record_schema_version("business", BUSINESS_SCHEMA_VERSION)
-            elif business_version == 9:
-                await pg_manager.ensure_business_schema()
-                await pg_manager.record_schema_version("business", BUSINESS_SCHEMA_VERSION)
-            elif business_version == 10:
-                # v10 初版 seed 存在缺陷（模板未导入、软删除表结构不匹配），
-                # 已应用的 v10 库通过幂等收敛修复；已正确的库重复执行无副作用。
+            elif business_version == 11:
+                # v11 初版：个人 Skill 元数据入库，幂等收敛
                 async with pg_manager.async_engine.begin() as conn:
                     await pg_manager.repair_role_template_seed(conn)
+            elif business_version == 12:
+                # v12 → v13: workflow_step_runs 唯一约束（防止 ARQ 重试创建重复记录）
+                await pg_manager.ensure_business_schema()
+            if business_version in {None, 2, 7, 8, 9, 10, 11, 12}:
+                await pg_manager.ensure_business_schema()
+                await pg_manager.record_schema_version("business", BUSINESS_SCHEMA_VERSION)
 
             if knowledge_version is None:
                 await pg_manager.create_knowledge_tables()

@@ -144,13 +144,13 @@ def test_list_skill_cards_route_scans_personal_source(monkeypatch):
 
 
 def test_personal_skill_confirm_and_delete_routes(monkeypatch):
-    async def fake_confirm(*, draft_id, slugs, operator):
+    async def fake_confirm(*, draft_id, slugs, operator, db=None):
         assert draft_id == "draft-1"
         assert slugs == ["demo-v2"]
         assert operator.uid == "user"
         return [{"slug": "demo", "requested_slug": "demo-v2", "success": True}]
 
-    async def fake_delete(uid, slug):
+    async def fake_delete(uid, slug, *, db=None):
         assert (uid, slug) == ("user", "demo")
 
     monkeypatch.setattr("server.routers.skill_router.confirm_personal_skill_install_draft", fake_confirm)

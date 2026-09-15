@@ -1601,7 +1601,7 @@ async def _worker_shutdown(ctx):
 async def process_workflow_run(ctx, run_id: int):
     """执行队列中的工作流运行任务。"""
     from yuxi.repositories.workflow_repository import WorkflowRepository
-    from yuxi.storage.postgres.models_business import WorkflowRun
+    from yuxi.storage.postgres.models_business import WorkflowRun, WorkflowStepRun
     from yuxi.workflows.engine import WorkflowEngine
     from yuxi.services.workflow_service import publish_workflow_event
 
@@ -1631,15 +1631,49 @@ async def process_workflow_run(ctx, run_id: int):
             if not workflow:
                 raise ValueError(f"工作流不存在: {run.workflow_id}")
 
+            # 预创建每个步骤的运行记录，以便回调中可以直接更新
+            steps = (workflow.definition or {}).get("steps", [])
+            for step in steps:
+                # 检查是否已存在（重试时避免重复创建）
+                existing = await repo.get_step_run(run_id, step["id"])
+                if existing:
+                    continue
+                step_run = WorkflowStepRun(
+                    workflow_run_id=run_id,
+                    step_id=step["id"],
+                    step_type=step.get("type", "llm"),
+                    status="pending",
+                )
+                await repo.create_step_run(step_run)
+            await session.commit()
+
             # 创建执行引擎（定义与输入变量在 execute 时传入）
+            # 异步锁保护回调，避免并行步骤并发访问同一 db session
+            callback_lock = asyncio.Lock()
+
+            async def _locked_step_start(step_id, step_type):
+                async with callback_lock:
+                    await _on_step_start(repo, run_id, step_id, step_type)
+                    await session.commit()  # 提交使前端轮询可见
+
+            async def _locked_step_done(step_id, output):
+                async with callback_lock:
+                    await _on_step_done(repo, run_id, step_id, output)
+                    await session.commit()  # 提交使前端轮询可见
+
+            async def _locked_step_error(step_id, error):
+                async with callback_lock:
+                    await _on_step_error(repo, run_id, step_id, error)
+                    await session.commit()  # 提交使前端轮询可见
+
             engine = WorkflowEngine(
-                on_step_start=lambda step_id, step_type: _on_step_start(repo, run_id, step_id, step_type),
-                on_step_done=lambda step_id, output: _on_step_done(repo, run_id, step_id, output),
-                on_step_error=lambda step_id, error: _on_step_error(repo, run_id, step_id, error),
+                on_step_start=_locked_step_start,
+                on_step_done=_locked_step_done,
+                on_step_error=_locked_step_error,
             )
 
             # 执行工作流
-            context = await engine.execute(workflow.definition, run.input_variables or {})
+            context = await engine.execute(workflow.definition, run.input_variables or {}, db_session=session)
 
             # 标记完成
             run.status = "completed"

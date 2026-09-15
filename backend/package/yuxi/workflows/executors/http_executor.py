@@ -13,7 +13,7 @@ from yuxi.workflows.executors import BaseStepExecutor
 class HTTPStepExecutor(BaseStepExecutor):
     """HTTP API 调用。"""
 
-    async def execute(self, step_data: dict[str, Any], context: dict[str, Any]) -> Any:
+    async def execute(self, step_data: dict[str, Any], context: dict[str, Any], **kwargs) -> Any:
         url = step_data.get("url")
         if not url:
             raise ValueError("http 步骤必须指定 url")
