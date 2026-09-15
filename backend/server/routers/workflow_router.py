@@ -137,6 +137,42 @@ async def list_workflows(
     }
 
 
+@workflow_router.get("/selectable")
+async def list_selectable_workflows(
+    user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取用户可选择的工作流列表（用于定时任务等下拉选择）。
+    
+    管理员：返回所有非平台工作流
+    普通用户：返回公司级 + 自己的个人级工作流
+    """
+    from sqlalchemy import or_
+    
+    repo = WorkflowRepository(db)
+    
+    if user.role in ("admin", "superadmin"):
+        # 管理员看所有非平台工作流
+        workflows = await repo.list_workflows(limit=200)
+        # 过滤掉平台工作流
+        workflows = [w for w in workflows if w.scope != "platform"]
+    else:
+        # 普通用户：公司级 + 自己的个人级
+        stmt = select(Workflow).where(
+            or_(
+                Workflow.scope == "company",
+                (Workflow.scope == "personal") & (Workflow.created_by == str(user.uid))
+            )
+        ).order_by(Workflow.updated_at.desc()).limit(200)
+        result = await db.execute(stmt)
+        workflows = list(result.scalars().all())
+    
+    return {
+        "success": True,
+        "data": [w.to_dict() for w in workflows],
+    }
+
+
 @workflow_router.get("/stats")
 async def get_workflow_stats(
     user: User = Depends(get_required_user),
