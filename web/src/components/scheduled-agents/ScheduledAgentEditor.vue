@@ -176,7 +176,7 @@ watch(
 watch(
   form,
   () => {
-    if (!hydrating && !props.isNew) emit('change', changePayload())
+    if (!hydrating) { /* 不再自动保存，由用户点击确认按钮 */ }
   },
   { deep: true }
 )
@@ -250,6 +250,7 @@ function cancelAction() {
 <template>
   <section class="inline-editor" aria-label="任务配置">
     <div class="title-line">
+      <span class="title-label">任务标题</span>
       <input
         v-model="form.name"
         class="name-input"
@@ -257,7 +258,6 @@ function cancelAction() {
         aria-label="任务名称"
         placeholder="未命名任务"
       />
-      <span v-if="!isNew" class="save-state" :class="saveState">{{ saveLabel }}</span>
     </div>
 
     <!-- 执行目标选择器 -->
@@ -515,10 +515,10 @@ function cancelAction() {
       </div>
     </section>
 
-    <div v-if="isNew" class="editor-actions">
+    <div class="editor-actions">
       <button type="button" class="btn-cancel" :disabled="saving" @click="cancelAction">取消</button>
       <button type="button" class="btn-confirm" :disabled="saving" @click="confirmAction">
-        {{ saving ? '创建中...' : '确认创建' }}
+        {{ saving ? (isNew ? '创建中...' : '保存中...') : (isNew ? '确认创建' : '确认修改') }}
       </button>
     </div>
   </section>
@@ -535,6 +535,14 @@ function cancelAction() {
   align-items: center;
   gap: 12px;
   padding: 6px 22px 6px;
+}
+
+.title-label {
+  flex: none;
+  color: var(--gray-600);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .name-input {

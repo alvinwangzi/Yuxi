@@ -146,25 +146,31 @@ function flushAutoSave() {
   return autosave.flush()
 }
 
-function queueAutoSave(change) {
-  if (creatingDraft.value) return
-  autosave.queue(change, selectedJob.value?.id)
-}
-
-async function confirmCreate(payload) {
+async function confirmSave(payload) {
   saving.value = true
   editorError.value = ''
   try {
-    const requestId = runNowRequests.get('create')
-    const savedJob = await scheduledAgentApi.create({ ...payload, request_id: requestId })
-    jobs.value = [{ ...savedJob, runs: [] }, ...jobs.value]
-    creatingDraft.value = false
-    selectedJobId.value = savedJob.id
-    autosave.leaveEditor()
-    runNowRequests.complete('create')
-    message.success('任务已创建')
+    if (creatingDraft.value) {
+      const requestId = runNowRequests.get('create')
+      const savedJob = await scheduledAgentApi.create({ ...payload, request_id: requestId })
+      jobs.value = [{ ...savedJob, runs: [] }, ...jobs.value]
+      creatingDraft.value = false
+      selectedJobId.value = savedJob.id
+      autosave.leaveEditor()
+      runNowRequests.complete('create')
+      message.success('任务已创建')
+    } else {
+      const jobId = selectedJob.value?.id
+      if (!jobId) throw new Error('任务 ID 不存在')
+      const savedJob = await scheduledAgentApi.update(jobId, payload)
+      jobs.value = jobs.value.map((job) =>
+        job.id === savedJob.id ? { ...job, ...savedJob, runs: job.runs || [] } : job
+      )
+      autosave.leaveEditor()
+      message.success('任务已保存')
+    }
   } catch (error) {
-    editorError.value = error.message || '创建任务失败'
+    editorError.value = error.message || (creatingDraft.value ? '创建任务失败' : '保存任务失败')
   } finally {
     saving.value = false
   }
@@ -441,8 +447,7 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
             :save-state="saveState"
             :error="editorError"
             :is-new="creatingDraft"
-            @change="queueAutoSave"
-            @confirm="confirmCreate"
+            @confirm="confirmSave"
             @cancel="cancelDraft"
           />
 
