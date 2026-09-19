@@ -16,6 +16,7 @@ from server.routers.graph_router import graph
 from server.routers.knowledge_dashboard_router import knowledge_dashboard
 from server.routers.knowledge_eval_router import evaluation
 from server.routers.knowledge_router import knowledge
+from server.routers.marketplace_router import router as marketplace_router
 from server.routers.mcp_router import mcp
 from server.routers.mention_router import mention_router
 from server.routers.model_provider_router import model_providers
@@ -54,6 +55,7 @@ router.include_router(channel_router)  # /api/system/channels/* IM 渠道管理
 router.include_router(category_router)  # /api/admin/categories/* 分类管理（CRUD + 排序）
 router.include_router(skills)  # /api/system/skills/* Skills 管理
 router.include_router(user_skills)  # /api/skills/* 用户可用 Skills
+router.include_router(marketplace_router)  # /api/marketplace/* 技能市场
 router.include_router(tools)  # /api/system/tools/* 工具列表与配置
 router.include_router(workflow_router)  # /api/workflows/* 工作流管理与执行
 router.include_router(user_router)  # /api/user/* 用户级配置与凭据
