@@ -216,6 +216,22 @@ const router = createRouter({
       ]
     },
     {
+      path: '/marketplace',
+      name: 'marketplace',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'SkillMarketComp',
+          component: () => import('../components/marketplace/SkillMarketPanel.vue'),
+          meta: {
+            keepAlive: false,
+            requiresAuth: true
+          }
+        }
+      ]
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'NotFound',
       component: () => import('../views/EmptyView.vue'),
