@@ -1538,6 +1538,76 @@ class PostgresManager(metaclass=SingletonMeta):
             # ── v14: 定时调度记录绑定实际工作流运行 ──
             "ALTER TABLE IF EXISTS scheduled_agent_runs ADD COLUMN IF NOT EXISTS workflow_run_id INTEGER REFERENCES workflow_runs(id) ON DELETE SET NULL",
             "CREATE INDEX IF NOT EXISTS ix_scheduled_agent_runs_workflow_run ON scheduled_agent_runs(workflow_run_id)",
+            # ── 技能市场表 ──
+            """
+            CREATE TABLE IF NOT EXISTS skill_market_entries (
+                id SERIAL PRIMARY KEY,
+                slug VARCHAR(128) NOT NULL UNIQUE,
+                title VARCHAR(256) NOT NULL,
+                description TEXT NOT NULL,
+                source_type VARCHAR(16) NOT NULL DEFAULT 'company',
+                status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                category_id INTEGER REFERENCES custom_categories(id),
+                author_uid VARCHAR(64),
+                publisher_uid VARCHAR(64),
+                original_skill_id INTEGER,
+                install_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_skill_market_entries_slug ON skill_market_entries(slug)",
+            "CREATE INDEX IF NOT EXISTS ix_skill_market_entries_status ON skill_market_entries(status)",
+            """
+            CREATE TABLE IF NOT EXISTS skill_market_versions (
+                id SERIAL PRIMARY KEY,
+                entry_id INTEGER NOT NULL REFERENCES skill_market_entries(id),
+                version VARCHAR(32) NOT NULL,
+                release_notes TEXT,
+                content_snapshot JSONB NOT NULL,
+                change_type VARCHAR(16) NOT NULL,
+                submitted_by VARCHAR(64) NOT NULL,
+                submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                approved_by VARCHAR(64),
+                approved_at TIMESTAMP,
+                is_latest BOOLEAN NOT NULL DEFAULT FALSE,
+                UNIQUE(entry_id, version)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_skill_market_versions_entry_id ON skill_market_versions(entry_id)",
+            """
+            CREATE TABLE IF NOT EXISTS skill_market_submissions (
+                id SERIAL PRIMARY KEY,
+                entry_id INTEGER NOT NULL REFERENCES skill_market_entries(id),
+                version_id INTEGER NOT NULL REFERENCES skill_market_versions(id),
+                submitter_uid VARCHAR(64) NOT NULL,
+                submission_note TEXT,
+                status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                reviewer_uid VARCHAR(64),
+                review_note TEXT,
+                submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_skill_market_submissions_entry_id ON skill_market_submissions(entry_id)",
+            """
+            CREATE TABLE IF NOT EXISTS skill_installations (
+                id SERIAL PRIMARY KEY,
+                user_uid VARCHAR(64) NOT NULL,
+                entry_id INTEGER NOT NULL REFERENCES skill_market_entries(id),
+                installed_version_id INTEGER NOT NULL REFERENCES skill_market_versions(id),
+                installed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_uid, entry_id)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_skill_installations_user_uid ON skill_installations(user_uid)",
+            "CREATE INDEX IF NOT EXISTS ix_skill_installations_entry_id ON skill_installations(entry_id)",
+            # ── 技能表增加市场关联字段 ──
+            "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS author_uid VARCHAR(64)",
+            "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS market_entry_id INTEGER",
+            "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS market_version_id INTEGER",
+            "CREATE INDEX IF NOT EXISTS ix_skills_author_uid ON skills(author_uid)",
+            "CREATE INDEX IF NOT EXISTS ix_skills_market_entry_id ON skills(market_entry_id)",
         ]
         async with self.async_engine.begin() as conn:
             # 历史未绑定用户的 API Key 会在下方迁移语句里被静默删除，先计数告警
