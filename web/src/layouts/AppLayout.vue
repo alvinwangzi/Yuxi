@@ -502,8 +502,8 @@ provide('settingsModal', {
           :current-chat-id="activeConversationThreadId"
           :chats-list="threads"
           :projects="projects"
-          :projects-loading="projectsLoading"
-          :projects-error="projectsError"
+          :projects-loading="projectsLoading && !projectsStore.hasLoaded"
+          :projects-error="projectsStore.hasLoaded ? '' : projectsError"
           :project-pending-id="projectPendingId"
           :has-more-chats="hasMoreThreads"
           :is-loading-more="isLoadingMoreThreads"
@@ -604,15 +604,15 @@ provide('settingsModal', {
 <style lang="less" scoped>
 // Less 变量定义
 @sidebar-width: 230px;
-@sidebar-collapsed-width: 56px;
+@sidebar-collapsed-width: 52px;
 @sidebar-padding-y: 6px;
 @sidebar-padding-x: 8px;
 @sidebar-padding: @sidebar-padding-y @sidebar-padding-x;
 @sidebar-border-width: 1px;
 @sidebar-item-height: 32px;
-@sidebar-item-padding-x: 10px;
+@sidebar-item-padding-x: 6px;
 @sidebar-icon-size: 16px;
-@brand-avatar-size: 28px;
+@brand-avatar-size: 24px;
 @sidebar-collapsed-content-width: @sidebar-collapsed-width - (2 * @sidebar-padding-x) -
   @sidebar-border-width;
 @sidebar-collapsed-icon-padding-x: (

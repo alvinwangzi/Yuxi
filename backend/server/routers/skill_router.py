@@ -149,6 +149,8 @@ async def list_skill_cards_route(
             "data": [_serialize_skill_for_user(item, current_user) for item in items],
             "allowed_access_levels": get_allowed_skill_access_levels(current_user),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list Skill cards: {e}")
         raise HTTPException(status_code=500, detail="获取 Skill 列表失败")
@@ -162,6 +164,8 @@ async def list_accessible_skills_route(
     try:
         items = await list_accessible_skills(db, current_user)
         return {"success": True, "data": [_serialize_skill_for_user(item, current_user) for item in items]}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list accessible skills: {e}")
         raise HTTPException(status_code=500, detail="获取可访问 Skills 失败")
@@ -183,6 +187,8 @@ async def prepare_skill_upload_route(
         return {"success": True, "data": data}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to prepare skill upload: {e}")
         raise HTTPException(status_code=500, detail="解析上传 Skill 失败")
@@ -197,6 +203,8 @@ async def list_remote_skills_route(
         return {"success": True, "data": await list_remote_skills(payload.source)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list remote skills from '{payload.source}': {e}")
         raise HTTPException(status_code=500, detail="获取远程 skills 列表失败")
@@ -210,6 +218,8 @@ async def search_remote_skills_route(
         return {"success": True, "data": await search_remote_skills(payload.query)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to search remote skills with query '{payload.query}': {e}")
         raise HTTPException(status_code=500, detail="搜索远程 skills 失败")
@@ -231,6 +241,8 @@ async def prepare_remote_skills_route(
         return {"success": True, "data": data}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to prepare remote skills from '{payload.source}': {e}")
         raise HTTPException(status_code=500, detail="解析远程 Skills 失败")
@@ -254,6 +266,8 @@ async def confirm_skill_install_draft_route(
         return {"success": True, "data": results, "summary": _summarize_results(results)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to confirm skill install draft '{draft_id}': {e}")
         raise HTTPException(status_code=500, detail="确认安装 Skill 失败")
@@ -276,6 +290,8 @@ async def confirm_personal_skill_install_draft_route(
         return {"success": True, "data": results, "summary": _summarize_results(results)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to confirm personal Skill draft '{draft_id}': {e}")
         raise HTTPException(status_code=500, detail="确认安装个人 Skill 失败")
@@ -294,6 +310,8 @@ async def read_personal_skill_file_route(
         }
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to read personal Skill file '{slug}/{path}': {e}")
         raise HTTPException(status_code=500, detail="读取个人 Skill 文件失败")
@@ -310,6 +328,8 @@ async def delete_personal_skill_route(
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete personal Skill '{slug}': {e}")
         raise HTTPException(status_code=500, detail="删除个人 Skill 失败")
@@ -322,6 +342,8 @@ async def discard_skill_install_draft_route(draft_id: str, current_user: User = 
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to discard skill install draft '{draft_id}': {e}")
         raise HTTPException(status_code=500, detail="取消安装 Skill 失败")
@@ -339,6 +361,8 @@ async def list_skills_route(
             "data": [_serialize_skill_for_user(item, current_user) for item in items],
             "allowed_access_levels": get_allowed_skill_access_levels(current_user),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list manageable skills: {e}")
         raise HTTPException(status_code=500, detail="获取技能列表失败")
@@ -356,6 +380,8 @@ async def get_skill_dependency_options_route(
         return {"success": True, "data": await get_skill_dependency_options(db, current_user, slug)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get skill dependency options: {e}")
         raise HTTPException(status_code=500, detail="获取 skill 依赖选项失败")
@@ -371,6 +397,8 @@ async def list_builtin_skills_route(
         return {"success": True, "data": [item.to_dict() for item in items]}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list builtin skills: {e}")
         raise HTTPException(status_code=500, detail="获取内置 skill 列表失败")
@@ -386,6 +414,8 @@ async def sync_builtin_skills_route(
         return {"success": True, "data": [item.to_dict() for item in items]}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to sync builtin skills: {e}")
         raise HTTPException(status_code=500, detail="同步内置 skill 失败")
@@ -429,6 +459,8 @@ async def update_skill_share_config_route(
         return {"success": True, "data": _serialize_skill_for_user(item, current_user)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update skill share config '{slug}': {e}")
         raise HTTPException(status_code=500, detail="更新 Skill 共享范围失败")
@@ -446,6 +478,8 @@ async def update_skill_enabled_route(
         return {"success": True, "data": _serialize_skill_for_user(item, current_user)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update skill enabled '{slug}': {e}")
         raise HTTPException(status_code=500, detail="更新 Skill 启用状态失败")
@@ -461,6 +495,8 @@ async def get_skill_tree_route(
         return {"success": True, "data": await get_skill_tree(db, slug=slug, operator=current_user)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get skill tree '{slug}': {e}")
         raise HTTPException(status_code=500, detail="获取技能目录树失败")
@@ -480,6 +516,8 @@ async def get_skill_file_route(
         }
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to read skill file '{slug}/{path}': {e}")
         raise HTTPException(status_code=500, detail="读取技能文件失败")
@@ -505,6 +543,8 @@ async def create_skill_file_route(
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create skill node '{slug}/{payload.path}': {e}")
         raise HTTPException(status_code=500, detail="创建技能文件失败")
@@ -529,6 +569,8 @@ async def update_skill_file_route(
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update skill file '{slug}/{payload.path}': {e}")
         raise HTTPException(status_code=500, detail="更新技能文件失败")
@@ -553,6 +595,8 @@ async def update_skill_dependencies_route(
         return {"success": True, "data": _serialize_skill_for_user(item, current_user)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to update skill dependencies '{slug}': {e}")
         raise HTTPException(status_code=500, detail="更新 skill 依赖失败")
@@ -570,6 +614,8 @@ async def delete_skill_file_route(
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete skill file '{slug}/{path}': {e}")
         raise HTTPException(status_code=500, detail="删除技能文件失败")
@@ -588,6 +634,8 @@ async def export_skill_route(
         return FileResponse(path=export_path, media_type="application/zip", filename=download_name)
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to export skill '{slug}': {e}")
         raise HTTPException(status_code=500, detail="导出技能失败")
@@ -604,6 +652,8 @@ async def delete_skill_route(
         return {"success": True}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete skill '{slug}': {e}")
         raise HTTPException(status_code=500, detail="删除技能失败")
@@ -620,6 +670,8 @@ async def delete_skills_batch_route(
         return {"success": True, "data": results, "summary": _summarize_results(results)}
     except ValueError as e:
         _raise_from_value_error(e)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete skills batch: {e}")
         raise HTTPException(status_code=500, detail="批量删除技能失败")

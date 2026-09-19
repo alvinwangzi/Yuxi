@@ -1,5 +1,9 @@
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+
+import { Check } from '@lucide/vue'
+import ActionDropdown from '@/components/common/ActionDropdown.vue'
+import ActionTrigger from '@/components/common/ActionTrigger.vue'
 
 import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 import ProjectSelectionSection from '@/components/ProjectSelectionSection.vue'
@@ -53,7 +57,7 @@ function initialForm(job) {
   const cronExpr = schedule?.cronExpression || buildCronExpression(schedule) || defaultSchedule.cronExpression
   const cronParts = cronExpr.split(/\s+/)
   return {
-    name: job?.name || '',
+    name: job?.name ?? '新建定时任务',
     prompt: job?.prompt || '',
     project_id: job?.project_id || '',
     target_type: job?.target_type || 'agent',
@@ -75,6 +79,37 @@ function initialForm(job) {
 
 const form = reactive(initialForm(props.job))
 let hydrating = false
+const nameInput = ref(null)
+const agentDropdownOpen = ref(false)
+const agentSearch = ref('')
+const selectedAgentLabel = computed(() => {
+  const agent = props.agents.find((item) => (item.slug || item.id) === form.agent_slug)
+  return agent?.name || form.agent_slug || '选择智能体'
+})
+const filteredAgents = computed(() => {
+  const query = agentSearch.value.trim().toLocaleLowerCase()
+  return props.agents.filter((agent) =>
+    [agent.name, agent.slug, agent.id].some((value) =>
+      String(value || '')
+        .toLocaleLowerCase()
+        .includes(query)
+    )
+  )
+})
+
+/** 选择任务智能体，不改变全局对话的智能体。 */
+function selectAgent(agent) {
+  form.agent_slug = agent.slug || agent.id
+  agentDropdownOpen.value = false
+}
+
+/** 打开配置时选中名称，方便直接改名。 */
+function focusName() {
+  nameInput.value?.focus({ preventScroll: true })
+  nameInput.value?.select()
+}
+
+onMounted(focusName)
 
 const daysInSelectedMonth = computed(() => {
   if (form.frequency !== 'yearly') return 31
@@ -161,6 +196,7 @@ watch(
     Object.assign(form, initialForm(props.job))
     await nextTick()
     hydrating = false
+    if (previousJobId || !jobId) focusName()
   }
 )
 
@@ -243,6 +279,7 @@ function cancelAction() {
     <div class="title-line">
       <span class="title-label">任务标题</span>
       <input
+        ref="nameInput"
         v-model="form.name"
         class="name-input"
         maxlength="255"
@@ -330,15 +367,46 @@ function cancelAction() {
         <div v-if="form.target_type === 'agent'" class="setting-row">
           <span>智能体</span>
           <div class="setting-control">
-            <select v-model="form.agent_slug" :disabled="saving" aria-label="执行智能体">
-              <option
-                v-for="agent in agents"
-                :key="agent.slug || agent.id"
-                :value="agent.slug || agent.id"
-              >
-                {{ agent.name || agent.slug || agent.id }}
-              </option>
-            </select>
+            <ActionDropdown
+              v-model:open="agentDropdownOpen"
+              v-model:search="agentSearch"
+              search-placeholder="搜索智能体"
+              :disabled="saving"
+            >
+              <template #trigger>
+                <ActionTrigger
+                  :label="selectedAgentLabel"
+                  :open="agentDropdownOpen"
+                  :disabled="saving"
+                  aria-label="执行智能体"
+                />
+              </template>
+              <div role="menu" aria-label="执行智能体">
+                <button
+                  v-for="agent in filteredAgents"
+                  :key="agent.slug || agent.id"
+                  type="button"
+                  role="menuitemradio"
+                  :aria-checked="form.agent_slug === (agent.slug || agent.id)"
+                  :disabled="saving"
+                  class="config-dropdown-item"
+                  :class="{ selected: form.agent_slug === (agent.slug || agent.id) }"
+                  @click="selectAgent(agent)"
+                >
+                  <span class="config-dropdown-item-label">{{
+                    agent.name || agent.slug || agent.id
+                  }}</span>
+                  <Check
+                    v-if="form.agent_slug === (agent.slug || agent.id)"
+                    :size="14"
+                    class="config-dropdown-item-check"
+                  />
+                </button>
+                <p v-if="!filteredAgents.length" class="agent-empty" role="status">
+                  {{ agentSearch.trim() ? '没有匹配的智能体' : '暂无可用智能体' }}
+                </p>
+              </div>
+            </ActionDropdown>
           </div>
         </div>
         <div class="setting-row">
@@ -386,18 +454,20 @@ function cancelAction() {
       <div class="settings-card">
         <fieldset class="setting-row frequency-row">
           <legend class="sr-only">重复频率</legend>
-          <span aria-hidden="true">重复</span>
-          <div class="frequency-options">
-            <label v-for="frequency in scheduleFrequencies" :key="frequency.value">
-              <input
-                type="radio"
-                name="schedule-frequency"
-                :value="frequency.value"
-                :checked="form.frequency === frequency.value"
-                @change="changeFrequency(frequency.value)"
-              />
-              <span>{{ frequency.label }}</span>
-            </label>
+          <div class="frequency-content">
+            <span aria-hidden="true">重复</span>
+            <div class="frequency-options">
+              <label v-for="frequency in scheduleFrequencies" :key="frequency.value">
+                <input
+                  type="radio"
+                  name="schedule-frequency"
+                  :value="frequency.value"
+                  :checked="form.frequency === frequency.value"
+                  @change="changeFrequency(frequency.value)"
+                />
+                <span>{{ frequency.label }}</span>
+              </label>
+            </div>
           </div>
         </fieldset>
         <div v-if="form.frequency === 'weekly'" class="setting-row weekday-row">
@@ -692,7 +762,7 @@ function cancelAction() {
   display: grid;
   min-height: 40px;
   margin: 0;
-  padding: 0 14px;
+  padding: 5px 14px;
   border-bottom: 1px solid var(--gray-100);
   grid-template-columns: 110px 1fr;
   align-items: center;
@@ -740,6 +810,20 @@ function cancelAction() {
 }
 
 .frequency-row {
+  display: block;
+
+  .frequency-content {
+    display: grid;
+    min-height: 30px;
+    grid-template-columns: 110px minmax(0, 1fr);
+    align-items: center;
+
+    > span {
+      color: var(--gray-600);
+      font-size: 13px;
+    }
+  }
+
   min-inline-size: 0;
   border-top: 0;
   border-inline: 0;
@@ -768,22 +852,11 @@ function cancelAction() {
 }
 
 .setting-control {
+  display: flex;
+  width: min(240px, 100%);
   min-width: 0;
-  max-width: 280px;
-  text-align: left;
-
-  :deep(.project-trigger),
-  :deep(.project-selection) {
-    justify-content: flex-start;
-  }
-
-  :deep(.model-select) {
-    justify-content: flex-start;
-  }
-
-  :deep(.config-dropdown-trigger) {
-    justify-content: flex-start;
-  }
+  justify-self: end;
+  justify-content: flex-end;
 }
 
 .weekday-options {
@@ -816,196 +889,33 @@ function cancelAction() {
   }
 }
 
-.interval-row {
-  .interval-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    justify-content: flex-start;
-  }
-
-  .interval-input {
-    width: 64px;
-    padding: 4px 8px;
-    border: 1px solid var(--gray-200);
-    border-radius: 6px;
-    background: var(--gray-50);
-    color: var(--gray-900);
-    font: inherit;
-    font-size: 14px;
-    text-align: center;
-    outline: none;
-
-    &:focus {
-      border-color: var(--primary-500);
-      background: #fff;
-    }
-  }
-
-  .interval-unit-select {
-    padding: 4px 8px;
-    border: 1px solid var(--gray-200);
-    border-radius: 6px;
-    background: var(--gray-50);
-    color: var(--gray-900);
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-    cursor: pointer;
-
-    &:focus {
-      border-color: var(--primary-500);
-      background: #fff;
-    }
-  }
-
-  .interval-suffix {
-    color: var(--gray-500);
-    font-size: 14px;
-  }
-}
-
-.custom-cron-section {
-  padding: 12px 14px;
-  border-top: 1px solid var(--gray-100);
-
-  .custom-cron-header {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--gray-700);
-    margin-bottom: 12px;
-  }
-
-  .custom-cron-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 12px;
-
-    .cron-field {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-
-      label {
-        font-size: 12px;
-        color: var(--gray-500);
-        font-weight: 500;
-      }
-
-      .cron-input {
-        padding: 6px 8px;
-        border: 1px solid var(--gray-200);
-        border-radius: 6px;
-        background: var(--gray-50);
-        color: var(--gray-900);
-        font: inherit;
-        font-size: 14px;
-        text-align: center;
-        outline: none;
-        width: 100%;
-
-        &:focus {
-          border-color: var(--primary-500);
-          background: #fff;
-        }
-      }
-
-      .cron-hint {
-        font-size: 11px;
-        color: var(--gray-400);
-        text-align: center;
-      }
-    }
-  }
-
-  .custom-cron-preview {
-    margin-top: 12px;
-    padding: 8px 12px;
-    background: var(--gray-50);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    .preview-label {
-      font-size: 12px;
-      color: var(--gray-500);
-    }
-
-    .preview-value {
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-      font-size: 13px;
-      color: var(--primary-600);
-      background: #fff;
-      padding: 2px 8px;
-      border-radius: 4px;
-    }
-  }
-
-  .custom-cron-legend {
-    margin-top: 10px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px;
-    font-size: 12px;
-    color: var(--gray-500);
-
-    code {
-      font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-      font-size: 12px;
-      background: var(--gray-100);
-      padding: 1px 5px;
-      border-radius: 3px;
-      color: var(--gray-700);
-    }
-  }
-}
-
-.inline-editor :deep(.project-selection) {
-  display: block;
-  width: 100%;
-}
-
-.inline-editor :deep(.project-trigger),
-.inline-editor :deep(.model-select--nano),
-.inline-editor :deep(.config-dropdown-trigger) {
-  width: 100%;
-  max-width: none;
+.setting-control :deep(.config-dropdown-trigger) {
   height: 30px;
+  max-width: 100%;
   padding: 0 8px;
-  border: 1px solid transparent;
   border-radius: 5px;
-  background: transparent;
   color: var(--gray-900);
-  font: inherit;
-  font-size: 13px;
-  justify-content: flex-start;
-  text-align: left;
 }
 
-.inline-editor :deep(.project-trigger-label),
-.inline-editor :deep(.model-info),
-.inline-editor :deep(.model-text),
-.inline-editor :deep(.config-dropdown-text) {
-  flex: 0 1 auto;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
+.setting-control :deep(.config-dropdown-text),
+.setting-control :deep(.config-dropdown-chevron) {
+  display: block;
 }
 
-.inline-editor :deep(.config-dropdown-chevron) {
-  margin-left: 2px;
+.setting-control :deep(.collapse-label) {
+  width: auto;
 }
 
-.inline-editor :deep(.model-select-content) {
-  justify-content: flex-start;
+.setting-control :deep(.collapse-label .config-dropdown-compact-icon) {
+  display: none;
 }
 
-.inline-editor :deep(.project-trigger:hover:not(:disabled)),
-.inline-editor :deep(.model-select--nano:hover),
-.inline-editor :deep(.config-dropdown-trigger:hover:not(:disabled)) {
-  border-color: transparent;
-  background: var(--gray-50);
+.agent-empty {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--gray-500);
+  font-size: 12px;
+  text-align: center;
 }
 
 .sr-only {
@@ -1044,8 +954,14 @@ function cancelAction() {
     width: 100%;
   }
 
+<<<<<<< HEAD
   .setting-row {
     grid-template-columns: 80px 1fr;
+=======
+  .setting-row,
+  .frequency-row .frequency-content {
+    grid-template-columns: 80px minmax(0, 1fr);
+>>>>>>> main
   }
 
   .weekday-options {

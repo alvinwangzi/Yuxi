@@ -155,17 +155,17 @@
           <div
             ref="messageInputDockRef"
             class="bottom"
-            :class="{ 'start-screen': !conversations.length }"
+            :class="{ 'start-screen': isNewConversation }"
           >
             <div class="message-input-wrapper">
               <!-- 加载状态：加载消息 -->
-              <div v-if="isLoadingMessages" class="chat-loading">
-                <div class="loading-spinner"></div>
+              <div v-if="isLoadingMessages" class="chat-loading" role="status">
+                <div class="loading-spinner" aria-hidden="true"></div>
                 <span>正在加载消息...</span>
               </div>
 
               <!-- 打招呼区域 - 在输入框上方 -->
-              <div v-if="!conversations.length" class="chat-greeting-input">
+              <div v-if="isNewConversation" class="chat-greeting-input">
                 <h1>{{ randomGreeting }}</h1>
               </div>
 
@@ -277,6 +277,7 @@
                   >
                     <template #extra>
                       <ProjectSelectionSection
+                        upward
                         v-if="!currentChatId"
                         v-model="selectedProjectId"
                         :disabled="threadCreationInFlight"
@@ -284,6 +285,7 @@
                     </template>
                     <template #actions-left-extra>
                       <ToolApprovalModeSelector
+                        upward
                         :model-value="currentToolApprovalMode"
                         @update:model-value="handleToolApprovalModeSelect"
                       />
@@ -317,6 +319,7 @@
                       />
                       <div class="input-model-selector">
                         <ModelSelectorComponent
+                          upward
                           :model_spec="currentModelSpec"
                           size="nano"
                           display-name="mini"
@@ -775,6 +778,13 @@
                               />
                             </div>
                             <div class="state-list-item-meta">{{ run.description }}</div>
+                            <div
+                              v-if="run.observation_error"
+                              class="state-list-item-meta"
+                              role="status"
+                            >
+                              状态暂不可用，正在重连
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -806,7 +816,7 @@
           :thread-id="currentChatId"
           :active-run-id="currentThreadState?.activeRunId || null"
           :run-active="Boolean(currentThreadState?.activeRunId && currentThreadState?.isStreaming)"
-          :visible="isFilePanelOpen"
+          :visible="isFilePanelOpen && subagentObservationEnabled"
           :messages="currentDebugMessages"
           :runs="currentThreadRuns"
           :panel-ratio="panelRatio"
@@ -872,7 +882,11 @@ import ExecutionModeSelector from '@/components/ExecutionModeSelector.vue'
 import SlashCommandMenu from '@/components/SlashCommandMenu.vue'
 import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 import AgentMessageComponent from '@/components/AgentMessageComponent.vue'
-import { formatEmptyRunStatus, isConversationSettled as isRunConversationSettled } from '@/utils/conversationProcessGrouping'
+import {
+  formatEmptyRunStatus,
+  groupConversationContinuations,
+  isConversationSettled as isRunConversationSettled
+} from '@/utils/conversationProcessGrouping'
 import RefsComponent from '@/components/RefsComponent.vue'
 import ToolCallsGroupComponent from '@/components/ToolCallsGroupComponent.vue'
 import ConversationProcessGroupComponent from '@/components/ConversationProcessGroupComponent.vue'
@@ -908,6 +922,7 @@ import HumanApprovalModal from '@/components/HumanApprovalModal.vue'
 import { extractPendingInterrupt, useApproval } from '@/composables/useApproval'
 import { useAgentThreadState, IDLE_QUEUE_SNAPSHOT } from '@/composables/useAgentThreadState'
 import { useAgentRunStream } from '@/composables/useAgentRunStream'
+import { useSubagentRuns } from '@/composables/useSubagentRuns'
 import { useAgentStreamHandler } from '@/composables/useAgentStreamHandler'
 import { useStreamSmoother } from '@/composables/useStreamSmoother'
 import { useAgentRequestQueue } from '@/composables/useAgentRequestQueue'
@@ -948,6 +963,7 @@ import {
 const props = defineProps({
   agentId: { type: String, default: '' },
   initialProjectId: { type: String, default: '' },
+  isNewConversation: { type: Boolean, required: true },
   singleMode: { type: Boolean, default: true },
   sendDisabled: { type: Boolean, default: false }
 })
@@ -1826,9 +1842,18 @@ const currentTodos = computed(() => {
     }
   })
 })
-const currentSubagentRuns = computed(() => {
-  const runs = currentAgentState.value?.subagent_runs
-  return Array.isArray(runs) ? runs : []
+const subagentObservationEnabled = ref(true)
+const currentSubagentRuns = useSubagentRuns({
+  scope: computed(() =>
+    userStore.isLoggedIn && userStore.uid && currentChatId.value
+      ? `${userStore.uid}:${currentChatId.value}`
+      : ''
+  ),
+  enabled: subagentObservationEnabled,
+  runs: computed(() => {
+    const runs = currentAgentState.value?.subagent_runs
+    return Array.isArray(runs) ? runs : []
+  })
 })
 const currentSubagentRunById = computed(() => {
   const runById = new Map()
@@ -1856,10 +1881,11 @@ const currentSubagentOptionBySlug = computed(() => {
 const openSubagentThread = (run) => {
   if (!run?.child_thread_id) return
   const threadId = String(run.child_thread_id)
-  const key = `subagent:${threadId}`
+  const key = `subagent:${run.run_id || threadId}`
   const section = {
     key,
     type: 'subagent',
+    runId: run.run_id || '',
     title: getSubagentRunName(run),
     threadId,
     avatar: getSubagentIconSrc(run),
@@ -1871,6 +1897,8 @@ const openSubagentThread = (run) => {
   statePanelOpen.value = false
   panelRatio.value = clampPanelRatio(previewPanelRatio)
 }
+
+provide('openSubagentThread', openSubagentThread)
 
 const toggleMessageDebugPanel = () => {
   if (isFilePanelOpen.value && agentPanelActiveSectionKey.value === MESSAGE_DEBUG_SECTION.key) {
@@ -1996,7 +2024,9 @@ const handleSlashKeyNav = (e) => {
 
 const currentThreadMessages = computed(() => threadMessages.value[currentChatId.value] || [])
 const currentThreadRuns = computed(() => threadRuns.value[currentChatId.value] || [])
-const currentRunById = computed(() => new Map(currentThreadRuns.value.map((run) => [run.run_id, run])))
+const currentRunById = computed(
+  () => new Map(currentThreadRuns.value.map((run) => [run.run_id, run]))
+)
 const getMessageRun = (message) => currentRunById.value.get(getMessageRunId(message)) || null
 const currentThreadHasHistory = computed(() => currentThreadMessages.value.length > 0)
 const currentThreadConfigNotice = computed(() => {
@@ -2206,7 +2236,10 @@ watch(
 )
 
 const historyConversations = computed(() => {
-  return MessageProcessor.convertServerHistoryToMessages(currentThreadMessages.value, currentThreadRuns.value)
+  return MessageProcessor.convertServerHistoryToMessages(
+    currentThreadMessages.value,
+    currentThreadRuns.value
+  )
 })
 
 function mergeLocalImageFields(message, localMessage) {
@@ -2273,7 +2306,9 @@ function mergeActiveRunOngoingIntoHistory(historyConvs, ongoingMessages, activeR
     }))
     .filter((conv) => conv.messages.length > 0 || conv.run)
 
-  const activeGroupIndex = filteredHistoryConvs.findIndex((conv) => conv.run?.run_id === activeRunId)
+  const activeGroupIndex = filteredHistoryConvs.findIndex(
+    (conv) => conv.run?.run_id === activeRunId
+  )
   if (activeGroupIndex !== -1) {
     const conv = filteredHistoryConvs[activeGroupIndex]
     filteredHistoryConvs[activeGroupIndex] = {
@@ -2331,15 +2366,17 @@ const conversations = computed(() => {
       messages: activeRunOngoingMessages,
       status: 'streaming'
     }
-    return [...activeRunHistoryConvs, onGoingConv]
+    return groupConversationContinuations([...activeRunHistoryConvs, onGoingConv])
   }
-  return activeRunHistoryConvs
+  return groupConversationContinuations(activeRunHistoryConvs)
 })
 
 /** 间隔超过一小时时，在新用户消息上方显示发送时间。 */
 const getConversationTimeLabel = (conv, previousConv) => {
   const sentAt = conv.messages.find((message) => message.type === 'human')?.created_at
-  const finishedAt = getMessageRun(previousConv?.messages.findLast((message) => message.type === 'ai'))?.timing?.finished_at
+  const finishedAt = getMessageRun(
+    previousConv?.messages.findLast((message) => message.type === 'ai')
+  )?.timing?.finished_at
   if (!sentAt || !finishedAt) return ''
 
   // 历史消息的无时区时间来自 PostgreSQL UTC，不能按浏览器本地时间解析。
@@ -2360,7 +2397,10 @@ const getConversationTimeLabel = (conv, previousConv) => {
 const conversationRows = computed(() => {
   const rows = conversations.value.map((conv, index) => ({
     type: 'conversation',
-    key: conv.status === 'streaming' ? 'ongoing-conversation' : `history-${index}`,
+    key:
+      conv.displayKey ||
+      conv.run?.run_id ||
+      (conv.status === 'streaming' ? 'ongoing-conversation' : `history-${index}`),
     conv,
     timeLabel: getConversationTimeLabel(conv, conversations.value[index - 1]),
     displayItems: getDisplayItems(conv),
@@ -2844,6 +2884,7 @@ onMounted(() => {
 })
 
 onActivated(() => {
+  subagentObservationEnabled.value = true
   nextTick(() => {
     startChatMainResizeObserver()
   })
@@ -2853,6 +2894,7 @@ onActivated(() => {
 })
 
 onDeactivated(() => {
+  subagentObservationEnabled.value = false
   stopChatMainResizeObserver()
   stopStreamingStateRefresh()
   stopReplyElapsedTimer()
@@ -3639,6 +3681,12 @@ const handleApprovalWithStream = async (answer) => {
     if (!runId) {
       throw new Error('创建 resume run 失败：缺少 run_id')
     }
+    // 首个流事件前读取已持久化的续跑关系；读取失败不能把已创建的 Run 当成创建失败。
+    try {
+      await fetchThreadMessages({ agentId: currentAgentId.value, threadId })
+    } catch (error) {
+      console.warn('Failed to refresh history before resume stream:', error)
+    }
     await startRunStream(threadId, runId, '0-0')
   } catch (error) {
     if (pendingInterrupt) {
@@ -3795,7 +3843,7 @@ const getMessageToolCalls = (message) => {
 const getDisplayItems = (conv) =>
   getConversationDisplayItems(conv, {
     enrichToolCalls: getMessageToolCalls,
-    runTiming: getMessageRun(getLastMessage(conv))?.timing,
+    runTiming: conv.processTiming || getMessageRun(getLastMessage(conv))?.timing,
     collapseIntermediate: conv?.status !== 'streaming' && isConversationSettled(conv)
   })
 
@@ -4361,17 +4409,12 @@ watch(currentChatId, (threadId, oldThreadId) => {
 }
 
 .chat-loading {
-  padding: 0 50px;
+  padding-bottom: 12px;
   text-align: center;
-  position: absolute;
-  top: 20%;
-  width: 100%;
-  z-index: 9;
-  animation: slideInUp 0.5s ease-out;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 8px;
 
   span {
     color: var(--gray-700);

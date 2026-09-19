@@ -64,8 +64,7 @@
                     </button>
                     <span
                       v-if="
-                        group.threadStatus === 'loading' &&
-                        !isProjectExpanded(group.project.id)
+                        group.threadStatus === 'loading' && !isProjectExpanded(group.project.id)
                       "
                       class="project-status project-status-loading"
                       role="status"
@@ -123,7 +122,7 @@
                   <CollapseTransition>
                     <div v-if="isProjectExpanded(group.project.id)" class="project-conversations">
                       <ConversationNavItem
-                        v-for="chat in group.conversations"
+                        v-for="chat in group.visibleConversations"
                         :key="chat.id"
                         :chat="chat"
                         :current-chat-id="currentChatId"
@@ -133,6 +132,14 @@
                         @rename-chat="$emit('rename-chat', $event)"
                         @toggle-pin="$emit('toggle-pin', $event)"
                       />
+                      <button
+                        v-if="group.hasMore"
+                        type="button"
+                        class="project-show-more"
+                        @click="showMoreProjectConversations(group)"
+                      >
+                        展开显示
+                      </button>
                       <div v-if="!group.conversations.length" class="project-empty">暂无对话</div>
                     </div>
                   </CollapseTransition>
@@ -232,11 +239,30 @@ const emit = defineEmits([
 const projectsExpanded = ref(true)
 const recentExpanded = ref(true)
 const expandedProjects = ref(new Set())
+const INITIAL_PROJECT_CONVERSATIONS = 5
+const PROJECT_CONVERSATIONS_STEP = 10
+const projectVisibleCounts = ref({})
 const groupedNavigation = computed(() =>
   buildProjectConversationGroups(props.projects, props.chatsList)
 )
-const projectGroups = computed(() => groupedNavigation.value.groups)
+const projectGroups = computed(() =>
+  groupedNavigation.value.groups.map((group) => {
+    const visibleCount =
+      projectVisibleCounts.value[group.project.id] ?? INITIAL_PROJECT_CONVERSATIONS
+    return {
+      ...group,
+      visibleCount,
+      visibleConversations: group.conversations.slice(0, visibleCount),
+      hasMore: group.conversations.length > visibleCount
+    }
+  })
+)
 const otherConversations = computed(() => groupedNavigation.value.otherConversations)
+
+/** 展开当前项目的下一批对话。 */
+function showMoreProjectConversations(group) {
+  projectVisibleCounts.value[group.project.id] = group.visibleCount + PROJECT_CONVERSATIONS_STEP
+}
 
 const isProjectExpanded = (projectId) => expandedProjects.value.has(projectId)
 const toggleProject = (projectId) => {
@@ -370,7 +396,7 @@ const confirmDeleteProject = (project) => {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 34px;
+  min-height: 30px;
   border-radius: 8px;
   color: var(--gray-800);
   &:hover,
@@ -395,7 +421,7 @@ const confirmDeleteProject = (project) => {
   flex: 1;
   align-items: center;
   gap: 7px;
-  height: 34px;
+  height: 30px;
   padding: 0 4px 0 7px;
   border: 0;
   background: transparent;
@@ -468,6 +494,25 @@ const confirmDeleteProject = (project) => {
   padding: 3px 8px 7px 30px;
   color: var(--gray-400);
   font-size: 12px;
+}
+.project-show-more {
+  display: block;
+  width: 100%;
+  padding: 2px 8px 2px 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  &:hover {
+    color: var(--gray-800);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--main-300);
+    outline-offset: -2px;
+  }
 }
 .list-state {
   padding: 18px 8px;
