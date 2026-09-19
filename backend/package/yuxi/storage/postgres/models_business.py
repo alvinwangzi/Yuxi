@@ -377,6 +377,10 @@ class Skill(Base):
     share_config = Column(JSON_VALUE, nullable=False, comment="共享权限配置")
     enabled = Column(Boolean, nullable=False, default=True, comment="是否启用")
     category_id = Column(Integer, ForeignKey("custom_categories.id"), nullable=True, index=True, comment="分类外键")
+    # 技能市场关联字段
+    author_uid = Column(String(64), nullable=True, index=True, comment="技能贡献者/作者")
+    market_entry_id = Column(Integer, ForeignKey("skill_market_entries.id"), nullable=True, index=True, comment="市场条目 ID（从市场安装的技能）")
+    market_version_id = Column(Integer, ForeignKey("skill_market_versions.id"), nullable=True, comment="安装时的市场版本 ID")
     created_by = Column(String(64), nullable=True)
     updated_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utc_now_naive)
@@ -400,6 +404,9 @@ class Skill(Base):
             "share_config": self.share_config or {},
             "enabled": bool(self.enabled),
             "category_id": self.category_id,
+            "author_uid": self.author_uid,
+            "market_entry_id": self.market_entry_id,
+            "market_version_id": self.market_version_id,
             "created_by": self.created_by,
             "updated_by": self.updated_by,
             "created_at": format_utc_datetime(self.created_at),
