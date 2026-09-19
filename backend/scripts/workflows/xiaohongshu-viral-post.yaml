@@ -13,9 +13,11 @@ concurrency: 3
 
 inputs:
   - name: topic
+    label: "笔记主题"
     description: "笔记主题（如：秋季穿搭技巧 / 职场新人避坑指南）"
     required: true
   - name: target_audience
+    label: "目标人群"
     description: "目标人群（如：25-35 岁女性白领，可选）"
     required: false
     default: "小红书主流用户（女性为主，关注生活方式）"
@@ -34,6 +36,7 @@ steps:
       3. **内容骨架**：建议的内容结构（开头钩子→主体价值→结尾互动）
       4. **互动设计**：让用户评论/收藏的 1 个具体触发点
     output: strategy
+    output_label: "策略分析"
 
   - id: copy
     role: "marketing/marketing-content-creator"
@@ -52,6 +55,7 @@ steps:
       - 夹杂 emoji 让视觉轻盈（不要堆砌）
       - 结尾 1 句引导评论/收藏
     output: post_body
+    output_label: "笔记正文"
     depends_on: [strategy]
 
   - id: title
@@ -71,6 +75,7 @@ steps:
       参考策略：
       {{strategy}}
     output: title_and_tags
+    output_label: "标题与标签"
     depends_on: [strategy]
 
   - id: final
@@ -100,4 +105,5 @@ steps:
       <2-3 行，包含建议发布时间、是否配图、评论区引导语>
       ```
     output: final_post
+    output_label: "最终成稿"
     depends_on: [copy, title]

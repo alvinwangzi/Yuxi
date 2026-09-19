@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 13
+BUSINESS_SCHEMA_VERSION = 14
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -1535,6 +1535,9 @@ class PostgresManager(metaclass=SingletonMeta):
                 END IF;
             END $$;
             """,
+            # ── v14: 定时调度记录绑定实际工作流运行 ──
+            "ALTER TABLE IF EXISTS scheduled_agent_runs ADD COLUMN IF NOT EXISTS workflow_run_id INTEGER REFERENCES workflow_runs(id) ON DELETE SET NULL",
+            "CREATE INDEX IF NOT EXISTS ix_scheduled_agent_runs_workflow_run ON scheduled_agent_runs(workflow_run_id)",
         ]
         async with self.async_engine.begin() as conn:
             # 历史未绑定用户的 API Key 会在下方迁移语句里被静默删除，先计数告警

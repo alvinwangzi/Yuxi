@@ -178,7 +178,7 @@ async def test_claim_concurrency_coalesce_and_soft_delete_history():
             assert await repo.get_job(job_id, uid) is None
             assert await repo.get_job(job_id, uid, include_deleted=True) is not None
             runs = await repo.list_recent_runs([job_id], uid, 20)
-            assert manual_id in {run.id for run, _request, _agent_run in runs}
+            assert manual_id in {run.id for run, _request, _agent_run, _wf_run in runs}
     finally:
         async with session_factory() as db:
             await db.execute(delete(ScheduledAgentRun).where(ScheduledAgentRun.job_id == job_id))

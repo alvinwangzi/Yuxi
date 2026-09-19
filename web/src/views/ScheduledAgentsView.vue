@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import { ExternalLink, Pause, Play, Plus, RefreshCw, Trash2, X, Zap } from '@lucide/vue'
+import { ExternalLink, Eye, History, Plus, Power, PowerOff, RefreshCw, Trash2, X, Zap } from '@lucide/vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 
 import { scheduledAgentApi } from '@/apis/scheduled_agent_api'
@@ -29,6 +29,19 @@ const activeActionId = ref('')
 const searchQuery = ref('')
 const statusFilter = ref('all')
 const runNowRequests = createRetriableRequestIds()
+const togglingJobId = ref('')
+
+// 历史抽屉状态
+const historyOpen = ref(false)
+const historyJobId = ref('')
+const historyRuns = ref([])
+const historyTotal = ref(0)
+const historyLoading = ref(false)
+const historyOffset = ref(0)
+const HISTORY_PAGE_SIZE = 20
+
+const historyJob = computed(() => jobs.value.find((j) => j.id === historyJobId.value) || null)
+
 const ACCEPTED_RUN_NOW_STATUSES = new Set([
   'dispatching',
   'submitted',
@@ -49,7 +62,8 @@ const RUN_STATUS_LABELS = {
   failed: '失败',
   rejected: '已拒绝',
   cancelled: '已取消',
-  interrupted: '已中断'
+  interrupted: '已中断',
+  unknown: '未知'
 }
 
 const availableAgents = computed(() =>
@@ -59,7 +73,7 @@ const selectedJob = computed(() => jobs.value.find((job) => job.id === selectedJ
 const detailOpen = computed(() => creatingDraft.value || Boolean(selectedJob.value))
 const detailStatusLabel = computed(() => {
   if (creatingDraft.value) return '新任务'
-  return selectedJob.value?.enabled ? '已开启' : '已暂停'
+  return selectedJob.value?.enabled ? '已开启' : '已关闭'
 })
 
 const filteredJobs = computed(() => {
@@ -77,7 +91,7 @@ const filteredJobs = computed(() => {
 const filterOptions = computed(() => [
   { value: 'all', label: '全部', count: jobs.value.length },
   { value: 'enabled', label: '已开启', count: jobs.value.filter((job) => job.enabled).length },
-  { value: 'paused', label: '已暂停', count: jobs.value.filter((job) => !job.enabled).length }
+  { value: 'paused', label: '已关闭', count: jobs.value.filter((job) => !job.enabled).length }
 ])
 
 async function load({ silent = false } = {}) {
@@ -219,12 +233,18 @@ async function runAction(job, action, fallback) {
   }
 }
 
-function toggle(job) {
-  return runAction(
-    job,
-    () => scheduledAgentApi.update(job.id, { enabled: !job.enabled }),
-    '更新任务状态失败'
-  )
+async function toggle(job) {
+  if (togglingJobId.value) return
+  togglingJobId.value = job.id
+  try {
+    const updated = await scheduledAgentApi.update(job.id, { enabled: !job.enabled })
+    jobs.value = jobs.value.map((j) => (j.id === updated.id ? { ...j, ...updated, runs: j.runs || [] } : j))
+    message.success(updated.enabled ? '任务已开启' : '任务已关闭')
+  } catch (error) {
+    message.error(error.message || '更新任务状态失败')
+  } finally {
+    togglingJobId.value = ''
+  }
 }
 
 async function runNow(job) {
@@ -287,6 +307,7 @@ function runStatusTone(run) {
   if (run.status === 'completed') return 'success'
   if (['failed', 'rejected', 'cancelled', 'interrupted'].includes(run.status)) return 'danger'
   if (run.status === 'skipped') return 'warning'
+  if (run.status === 'unknown') return 'muted'
   return 'active'
 }
 
@@ -300,10 +321,123 @@ async function openConversation(run) {
   await router.push({ name: 'AgentCompWithThreadId', params: { thread_id: run.thread_id } })
 }
 
+/** 工作流类型运行记录是否可查看执行详情 */
+function canViewRunDetail(run) {
+  return run.target_type === 'workflow'
+}
+
+/** 跳转到工作流编辑器查看运行详情 */
+async function viewRunDetail(run) {
+  if (!canViewRunDetail(run)) return
+  if (!(await flushAutoSave())) return
+  // 需要找到对应的工作流 ID，从 job 的 workflow_id 获取
+  const workflowId = run.workflow_id || selectedJob.value?.workflow_id || historyJob.value?.workflow_id
+  if (!workflowId) {
+    message.warning('无法找到对应的工作流')
+    return
+  }
+  const params = { name: 'WorkflowEditor', params: { id: workflowId } }
+  // 只有有 workflow_run_id 时才传递 run_id 参数以自动打开运行结果
+  if (run.workflow_run_id) {
+    params.query = { run_id: run.workflow_run_id }
+  }
+  await router.push(params)
+}
+
+/** 统一的运行记录点击处理 */
+async function handleRunClick(run) {
+  if (canOpenConversation(run)) {
+    await openConversation(run)
+  } else if (canViewRunDetail(run)) {
+    await viewRunDetail(run)
+  }
+}
+
 function runRecordLabel(run) {
   const trigger = run.trigger === 'manual' ? '手动运行' : '定时运行'
-  const availability = canOpenConversation(run) ? '打开对应对话' : '没有可用对话'
-  return `${trigger}，${runStatusLabel(run)}，${formatRunTime(run.scheduled_for)}，${availability}`
+  let availability
+  if (run.target_type === 'workflow') {
+    availability = canViewRunDetail(run) ? '，查看工作流执行详情' : ''
+  } else {
+    availability = canOpenConversation(run) ? '，打开对应对话' : '，没有可用对话'
+  }
+  return `${trigger}，${runStatusLabel(run)}，${formatRunTime(run.scheduled_for)}${availability}`
+}
+
+function lastExecutionInfo(job) {
+  const last = job.last_execution
+  if (!last) return { label: '未执行', tone: 'muted' }
+  const time = formatRunTime(last.scheduled_for)
+  if (last.status === 'completed') return { label: `${time} 成功`, tone: 'success' }
+  if (['failed', 'rejected', 'cancelled', 'interrupted'].includes(last.status)) {
+    return { label: `${time} 失败`, tone: 'danger' }
+  }
+  if (['running', 'pending', 'dispatching', 'submitted', 'queued', 'dispatched'].includes(last.status)) {
+    return { label: `${time} ${runStatusLabel(last)}`, tone: 'active' }
+  }
+  if (last.status === 'skipped') return { label: `${time} 已跳过`, tone: 'warning' }
+  return { label: `${time} ${runStatusLabel(last)}`, tone: 'muted' }
+}
+
+async function openHistory(job) {
+  historyJobId.value = job.id
+  historyOffset.value = 0
+  historyOpen.value = true
+  await loadHistoryRuns()
+}
+
+function closeHistory() {
+  historyOpen.value = false
+  historyJobId.value = ''
+  historyRuns.value = []
+  historyTotal.value = 0
+  historyOffset.value = 0
+}
+
+async function loadHistoryRuns() {
+  if (!historyJobId.value) return
+  historyLoading.value = true
+  try {
+    const result = await scheduledAgentApi.listRuns(historyJobId.value, {
+      limit: HISTORY_PAGE_SIZE,
+      offset: historyOffset.value
+    })
+    historyRuns.value = result.runs || []
+    historyTotal.value = result.total || 0
+  } catch (error) {
+    message.error(error.message || '加载历史记录失败')
+    historyRuns.value = []
+    historyTotal.value = 0
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function historyNextPage() {
+  if (historyOffset.value + HISTORY_PAGE_SIZE < historyTotal.value) {
+    historyOffset.value += HISTORY_PAGE_SIZE
+    loadHistoryRuns()
+  }
+}
+
+function historyPrevPage() {
+  if (historyOffset.value > 0) {
+    historyOffset.value = Math.max(0, historyOffset.value - HISTORY_PAGE_SIZE)
+    loadHistoryRuns()
+  }
+}
+
+function formatFullTime(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(date)
 }
 
 watch([searchQuery, statusFilter], () => {
@@ -369,21 +503,56 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
           </div>
 
           <div v-else-if="filteredJobs.length" class="task-list">
-            <button
+            <div
               v-for="job in filteredJobs"
               :key="job.id"
-              type="button"
-              class="task-row"
+              class="task-card"
               :class="{ selected: selectedJobId === job.id }"
               :aria-current="selectedJobId === job.id ? 'true' : undefined"
-              @click="selectJob(job)"
             >
-              <span class="task-copy">
-                <strong>{{ job.name }}</strong>
-                <small>{{ scheduleLabel(job) }}</small>
-              </span>
-              <span class="task-state">{{ job.enabled ? '开启' : '暂停' }}</span>
-            </button>
+              <div class="task-card-main" @click="selectJob(job)">
+                <div class="task-card-row1">
+                  <span class="task-card-badge" :class="job.enabled ? 'enabled' : 'disabled'">
+                    {{ job.enabled ? '已开启' : '已关闭' }}
+                  </span>
+                  <strong class="task-card-title">{{ job.name }}</strong>
+                </div>
+                <div class="task-card-row2">
+                  <small class="task-card-freq">{{ scheduleLabel(job) }}</small>
+                  <span class="task-card-last-run">
+                    <span class="run-dot" :class="lastExecutionInfo(job).tone"></span>
+                    <span>{{ lastExecutionInfo(job).label }}</span>
+                  </span>
+                </div>
+              </div>
+              <div class="task-card-actions">
+                <button type="button" class="card-btn" title="查看详情" @click="selectJob(job)">
+                  <Eye :size="14" />
+                </button>
+                <button type="button" class="card-btn" title="历史记录" @click="openHistory(job)">
+                  <History :size="14" />
+                </button>
+                <button
+                  type="button"
+                  class="card-btn"
+                  :title="job.enabled ? '关闭' : '开启'"
+                  :disabled="togglingJobId === job.id"
+                  @click.stop="toggle(job)"
+                >
+                  <Power v-if="!job.enabled" :size="14" />
+                  <PowerOff v-else :size="14" />
+                </button>
+                <button
+                  type="button"
+                  class="card-btn danger"
+                  title="删除"
+                  :disabled="activeActionId === job.id"
+                  @click.stop="remove(job)"
+                >
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </div>
           </div>
 
           <div v-else class="list-empty">
@@ -411,12 +580,19 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
                 </button>
                 <button
                   type="button"
-                  :disabled="Boolean(activeActionId)"
+                  :disabled="togglingJobId === selectedJob.id"
                   @click="toggle(selectedJob)"
                 >
-                  <Pause v-if="selectedJob.enabled" :size="15" aria-hidden="true" />
-                  <Play v-else :size="15" aria-hidden="true" />
-                  {{ selectedJob.enabled ? '暂停' : '恢复' }}
+                  <Power v-if="!selectedJob.enabled" :size="15" aria-hidden="true" />
+                  <PowerOff v-else :size="15" aria-hidden="true" />
+                  {{ selectedJob.enabled ? '关闭' : '开启' }}
+                </button>
+                <button
+                  type="button"
+                  @click="openHistory(selectedJob)"
+                >
+                  <History :size="15" aria-hidden="true" />
+                  历史
                 </button>
                 <button
                   type="button"
@@ -454,45 +630,96 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
           <section v-if="selectedJob" class="history-section" aria-labelledby="runs-heading">
             <header>
               <div>
-                <h3 id="runs-heading">运行历史记录</h3>
-                <p>点击记录进入本次运行创建的对话。</p>
+                <h3 id="runs-heading">最近运行</h3>
+                <p>{{ selectedJob.runs?.length || 0 }} 条记录</p>
               </div>
-              <span>{{ selectedJob.runs?.length || 0 }} 条</span>
+              <button type="button" class="view-all-btn" @click="openHistory(selectedJob)">
+                <History :size="13" /> 查看全部
+              </button>
             </header>
 
             <div v-if="selectedJob.runs?.length" class="run-list">
-              <button
+              <div
                 v-for="run in selectedJob.runs"
                 :key="run.id"
-                type="button"
                 class="run-row"
-                :class="{ actionable: canOpenConversation(run) }"
-                :disabled="!canOpenConversation(run)"
+                :class="{ actionable: canOpenConversation(run) || canViewRunDetail(run) }"
+                :role="(canOpenConversation(run) || canViewRunDetail(run)) ? 'button' : undefined"
+                :tabindex="(canOpenConversation(run) || canViewRunDetail(run)) ? 0 : undefined"
                 :aria-label="runRecordLabel(run)"
-                @click="openConversation(run)"
+                @click="handleRunClick(run)"
+                @keydown.enter="handleRunClick(run)"
               >
-                <span class="run-status" :class="runStatusTone(run)">{{
-                  runStatusLabel(run)
-                }}</span>
+                <span class="run-status" :class="runStatusTone(run)">{{ runStatusLabel(run) }}</span>
                 <span class="run-copy">
                   <strong>{{ run.trigger === 'manual' ? '手动运行' : '定时运行' }}</strong>
-                  <small v-if="run.error_message" :title="run.error_message">{{
-                    run.error_message
-                  }}</small>
+                  <small v-if="run.error_message" :title="run.error_message">{{ run.error_message }}</small>
                   <small v-else>{{
-                    canOpenConversation(run) ? '查看对话和运行结果' : '尚未创建对话'
+                    run.target_type === 'workflow'
+                      ? (canViewRunDetail(run) ? '查看工作流执行详情' : '')
+                      : (canOpenConversation(run) ? '查看对话和运行结果' : '')
                   }}</small>
                 </span>
                 <time :datetime="run.scheduled_for">{{ formatRunTime(run.scheduled_for) }}</time>
-                <ExternalLink v-if="canOpenConversation(run)" :size="15" aria-hidden="true" />
-                <span v-else class="no-conversation">无对话</span>
-              </button>
+                <ExternalLink v-if="canOpenConversation(run) || canViewRunDetail(run)" :size="15" aria-hidden="true" />
+              </div>
             </div>
             <p v-else class="runs-empty">任务运行后，记录会显示在这里。</p>
           </section>
         </main>
       </Transition>
     </section>
+
+    <!-- 历史抽屉 -->
+    <Transition name="drawer-slide">
+      <aside v-if="historyOpen" class="history-drawer" aria-label="运行历史">
+        <header class="drawer-header">
+          <div>
+            <h2>{{ historyJob?.name || '任务' }} — 运行历史</h2>
+            <span>{{ historyTotal }} 条记录</span>
+          </div>
+          <button type="button" class="icon-button" aria-label="关闭历史" @click="closeHistory">
+            <X :size="17" />
+          </button>
+        </header>
+
+        <div v-if="historyLoading" class="drawer-loading">加载中…</div>
+        <div v-else-if="!historyRuns.length" class="drawer-empty">暂无运行记录。</div>
+        <div v-else class="drawer-list">
+          <div
+            v-for="run in historyRuns"
+            :key="run.id"
+            class="drawer-run-row"
+            :class="{ actionable: canOpenConversation(run) || canViewRunDetail(run) }"
+            :role="(canOpenConversation(run) || canViewRunDetail(run)) ? 'button' : undefined"
+            :tabindex="(canOpenConversation(run) || canViewRunDetail(run)) ? 0 : undefined"
+            @click="handleRunClick(run)"
+            @keydown.enter="handleRunClick(run)"
+          >
+            <div class="drawer-run-top">
+              <span class="run-status" :class="runStatusTone(run)">{{ runStatusLabel(run) }}</span>
+              <span class="drawer-trigger">{{ run.trigger === 'manual' ? '手动' : '定时' }}</span>
+              <time>{{ formatFullTime(run.scheduled_for) }}</time>
+            </div>
+            <div class="drawer-run-bottom">
+              <span v-if="run.started_at">开始：{{ formatFullTime(run.started_at) }}</span>
+              <span v-else class="muted">未开始</span>
+              <span v-if="run.completed_at">结束：{{ formatFullTime(run.completed_at) }}</span>
+              <span v-if="run.error_message" class="drawer-error" :title="run.error_message">
+                {{ run.error_message }}
+              </span>
+            </div>
+            <ExternalLink v-if="canOpenConversation(run) || canViewRunDetail(run)" :size="14" class="drawer-link-icon" />
+          </div>
+        </div>
+
+        <footer v-if="historyTotal > HISTORY_PAGE_SIZE" class="drawer-footer">
+          <button type="button" :disabled="historyOffset === 0" @click="historyPrevPage">上一页</button>
+          <span>{{ historyOffset + 1 }}–{{ Math.min(historyOffset + HISTORY_PAGE_SIZE, historyTotal) }} / {{ historyTotal }}</span>
+          <button type="button" :disabled="historyOffset + HISTORY_PAGE_SIZE >= historyTotal" @click="historyNextPage">下一页</button>
+        </footer>
+      </aside>
+    </Transition>
   </div>
 </template>
 
@@ -602,68 +829,150 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
 .task-list {
   display: grid;
   padding: 8px 12px;
+  gap: 6px;
+}
+
+.task-card {
+  display: flex;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-150);
+  border-radius: 8px;
+  background: var(--gray-0);
+  align-items: center;
+  gap: 8px;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+
+  &:hover {
+    border-color: var(--gray-200);
+    background: var(--gray-10);
+  }
+
+  &.selected {
+    border-color: var(--main-color);
+    background: var(--main-50);
+  }
+}
+
+.task-card-main {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  display: grid;
   gap: 4px;
 }
 
-.task-row {
-  display: grid;
-  width: 100%;
-  min-height: 60px;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  grid-template-columns: minmax(0, 1fr) auto;
+.task-card-row1 {
+  display: flex;
   align-items: center;
-  column-gap: 10px;
-  transition:
-    background-color 120ms ease,
-    border-color 120ms ease;
+  gap: 8px;
+  min-width: 0;
+}
 
-  &:hover,
-  &.selected {
-    border-color: var(--gray-150);
-    background: var(--gray-0);
+.task-card-title {
+  overflow: hidden;
+  color: var(--gray-900);
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.task-card-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+
+  &.enabled {
+    background: var(--color-success-50);
+    color: var(--color-success-700);
+  }
+
+  &.disabled {
+    background: var(--gray-100);
+    color: var(--gray-500);
+  }
+}
+
+.task-card-row2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-card-freq {
+  color: var(--gray-400);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-card-last-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--gray-500);
+  font-size: 11px;
+}
+
+.run-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gray-300);
+
+  &.success { background: var(--color-success-500); }
+  &.danger { background: var(--color-error-500); }
+  &.active { background: var(--color-info-500); }
+  &.warning { background: var(--color-warning-500); }
+  &.muted { background: var(--gray-300); }
+}
+
+.task-card-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.card-btn {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+
+  &:hover:not(:disabled) {
+    background: var(--gray-50);
+    color: var(--gray-800);
   }
 
   &:focus-visible {
     outline: 2px solid var(--main-color);
-    outline-offset: -2px;
-  }
-}
-
-.task-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-
-  strong,
-  small {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    outline-offset: 1px;
   }
 
-  strong {
-    color: var(--gray-900);
-    font-size: 13px;
-    font-weight: 550;
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
-  small {
-    color: var(--gray-400);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
+  &.danger:hover:not(:disabled) {
+    background: var(--color-error-50);
+    color: var(--color-error-700);
   }
-}
-
-.task-state {
-  color: var(--gray-400);
-  font-size: 11px;
 }
 
 .task-skeleton {
@@ -898,6 +1207,209 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
   font-size: 12px;
 }
 
+.view-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-500);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--gray-50);
+    color: var(--gray-800);
+  }
+}
+
+/* 历史抽屉 */
+.history-drawer {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  right: 0;
+  display: flex;
+  width: 400px;
+  max-width: 90vw;
+  height: 100%;
+  flex-direction: column;
+  border-left: 1px solid var(--gray-150);
+  background: var(--gray-0);
+  box-shadow: -4px 0 16px rgb(0 0 0 / 6%);
+}
+
+.drawer-header {
+  display: flex;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--gray-150);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+
+  h2 {
+    margin: 0;
+    color: var(--gray-900);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  span {
+    color: var(--gray-400);
+    font-size: 12px;
+  }
+
+  .icon-button {
+    display: inline-flex;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--gray-500);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+
+    &:hover {
+      background: var(--gray-50);
+      color: var(--gray-800);
+    }
+  }
+}
+
+.drawer-loading,
+.drawer-empty {
+  display: grid;
+  padding: 40px 20px;
+  color: var(--gray-400);
+  font-size: 13px;
+  place-content: center;
+}
+
+.drawer-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px;
+}
+
+.drawer-run-row {
+  position: relative;
+  display: grid;
+  min-height: 56px;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--gray-100);
+  gap: 4px;
+
+  &.actionable {
+    cursor: pointer;
+
+    &:hover {
+      background: var(--gray-25);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--main-color);
+    outline-offset: -2px;
+  }
+}
+
+.drawer-run-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  time {
+    margin-left: auto;
+    color: var(--gray-400);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.drawer-trigger {
+  color: var(--gray-500);
+  font-size: 11px;
+}
+
+.drawer-run-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--gray-500);
+  font-size: 11px;
+
+  .muted {
+    color: var(--gray-400);
+  }
+}
+
+.drawer-error {
+  overflow: hidden;
+  max-width: 200px;
+  color: var(--color-error-600);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-link-icon {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  color: var(--gray-400);
+}
+
+.drawer-footer {
+  display: flex;
+  padding: 10px 20px;
+  border-top: 1px solid var(--gray-150);
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
+  span {
+    color: var(--gray-500);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  button {
+    padding: 4px 10px;
+    border: 1px solid var(--gray-200);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--gray-700);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--gray-50);
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+  }
+}
+
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+}
+
 .detail-slide-enter-active {
   transition:
     flex-basis 160ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -975,6 +1487,15 @@ defineExpose({ beforeLeave: flushAutoSave, loading, saving })
     .no-conversation {
       display: none;
     }
+  }
+
+  .task-card-actions {
+    flex-wrap: wrap;
+  }
+
+  .history-drawer {
+    width: 100%;
+    max-width: 100vw;
   }
 }
 

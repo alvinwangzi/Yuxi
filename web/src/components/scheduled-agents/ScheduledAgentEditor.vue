@@ -59,7 +59,7 @@ function initialForm(job) {
     target_type: job?.target_type || 'agent',
     agent_slug: job?.agent_slug || agentValues.value[0] || '',
     workflow_id: job?.workflow_id || '',
-    input_variables: job?.input_variables || {},
+    input_variables: job?.input_variables ? { ...job.input_variables } : {},
     ...schedule,
     cronExpression: cronExpr,
     cronMinute: cronParts[0] || '0',
@@ -83,15 +83,6 @@ const daysInSelectedMonth = computed(() => {
 })
 const availableDayOptions = computed(() => dayOptions.slice(0, daysInSelectedMonth.value))
 
-const saveLabel = computed(() => {
-  if (!props.job && props.saveState === 'invalid') return '填写完整后自动创建'
-  if (props.saveState === 'dirty') return '等待自动保存'
-  if (props.saveState === 'saving' || props.saving) return '正在保存'
-  if (props.saveState === 'saved') return '已自动保存'
-  if (props.saveState === 'error') return '保存失败'
-  if (props.saveState === 'invalid') return '补全必填项后自动保存'
-  return props.job ? '修改会自动保存' : '填写完整后自动创建'
-})
 
 function validationMessage() {
   if (!form.name.trim()) return '请输入任务名称'
@@ -260,8 +251,8 @@ function cancelAction() {
       />
     </div>
 
-    <!-- 执行目标选择器 -->
-    <div class="target-type-selector">
+    <!-- 执行目标选择器（仅新建时显示） -->
+    <div v-if="isNew" class="target-type-selector">
       <label class="target-type-option" :class="{ active: form.target_type === 'agent' }">
         <input type="radio" v-model="form.target_type" value="agent" />
         <span class="target-icon">🤖</span>
@@ -317,7 +308,10 @@ function cancelAction() {
               :key="v.name"
               class="setting-row"
             >
-              <span :title="v.description || ''">{{ v.name }}</span>
+              <span :title="v.description || v.name">
+                {{ v.label || v.description || v.name }}
+                <small v-if="v.label && v.name !== v.label" class="var-name-suffix">{{ v.name }}</small>
+              </span>
               <div class="setting-control">
                 <input
                   v-model="form.input_variables[v.name]"
@@ -1066,6 +1060,15 @@ function cancelAction() {
 .workflow-no-vars {
   opacity: 0.6;
   font-size: 0.85em;
+}
+
+.var-name-suffix {
+  display: inline;
+  color: var(--gray-400);
+  font-size: 11px;
+  font-family: monospace;
+  margin-left: 4px;
+  font-weight: normal;
 }
 
 .editor-actions {

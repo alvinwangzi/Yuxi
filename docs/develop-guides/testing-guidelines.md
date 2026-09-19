@@ -2,6 +2,20 @@
 
 测试的目标是证明用户可观察的结果和工程边界，而不是堆积测试数量。先选最接近风险的最小测试集，再按改动范围扩大；单元测试不能代替真实 HTTP、数据库、worker、文件或浏览器验证。
 
+## 按任务选择验证
+
+只读问答报告检查到的事实及限制；环境操作核对真实端口、readiness 和受影响功能。读取本页不自动要求启动服务或运行全部命令。代码、文档与规则变更按下表选择最低证据，进入提交阶段时再执行本页的提交前必跑检查。
+
+| 改动面 | 最低证据 | 升级条件 |
+|---|---|---|
+| 纯 Python / JavaScript 逻辑 | 相关 unit，断言业务结果 | 数据库、缓存或文件副作用补 integration |
+| API / 权限 / 持久化 | 真实 HTTP integration | 跨 worker、队列或用户主链路补 E2E |
+| Run / FIFO / SSE / 沙盒 / 恢复 | E2E，核对最终状态与产物 | 外部可选服务缺失时记录环境和未验证范围 |
+| 前端代码与交互 | lint、unit；UI 改动另做真实页面验证 | 前端代码提交前还须 build |
+| 文档 / 规则 / 导航 | 相对链接、工程契约检查及其 unit、docs build、补丁检查 | 同时改变公开行为时补对应代码验证 |
+
+UI 验证提供脱敏的最终截图或录屏，按适用范围覆盖浅/深色、响应式、loading、empty、error；清理中间截图，最终证据放在源码目录之外。涉及共享状态、真实用户数据或外部服务的测试，先确认环境、授权与清理边界。
+
 ## 测试分层
 
 | 层级 | 目录 | 适合验证什么 | 环境 |
@@ -75,7 +89,7 @@ test_agent_bubble_sort_run_creates_expected_artifacts
 
 ## 常用命令
 
-先启动开发环境：
+需要真实服务的检查（integration、E2E、真实 HTTP）先启动开发环境；unit、lint 和工程契约检查不需要 Docker：
 
 ```bash
 docker compose up -d
@@ -90,6 +104,8 @@ docker compose exec api uv run --group test pytest test/unit -m "not slow"
 docker compose exec api uv run --group test pytest test/integration
 docker compose exec api uv run --group test pytest test/e2e -m e2e
 docker compose exec api uv run --group test pytest test
+docker compose exec api uv run ruff check package
+docker compose exec api uv run ruff format package --check
 ```
 
 也可以从仓库根目录使用脚本：
@@ -156,7 +172,7 @@ docker compose exec api uv run --group test pytest test/unit/performance -q
 
 矩阵只在[隔离槽位](./parallel-worktree-environments.md)运行。先导出槽位变量、测试认证变量和 `MATRIX_FINE_TIMING`，用 `docker compose -f docker-compose.yml -f backend/test/performance/compose.yml up -d --no-deps api` 装配实验 API；矩阵命令按 `--workers` 重建实验 Worker。采样结束或中断后，用普通 Compose 的 `up -d --no-deps --force-recreate --scale worker=1 api worker` 恢复普通入口。探针属于实验装配，不进入 shipping 启动。
 
-`report` 默认只读已有样本，在相同目录生成 `stages.json` 与 `report.md`，不访问容器或模型，不改原始样本；仅在实验容器仍运行时显式使用 `--refresh` 补齐日志，并另外保存 `complete.json`。本地派生报告不替代决策记录中的可审阅结果。
+`report` 读取已有样本作为输入，在同一目录写入 `stages.json` 与 `report.md`，不访问容器或模型，不改原始样本；仅在实验容器仍运行时显式使用 `--refresh` 补齐日志，并另外保存 `complete.json`。本地派生报告不替代决策记录中的可审阅结果。
 
 ## 证据和报告
 
@@ -180,5 +196,7 @@ docker compose exec api uv run --group test pytest test/unit/performance -q
 - 真实 API、数据库、worker、文件、对象或浏览器语义已经按风险验证。
 - expected output、fixture 和 snapshot 的更新经过人工审阅。
 - PR 如实记录命令、结果和未验证范围。
+
+所有代码和文档提交前必须执行工程契约检查、对应单元测试和 `git diff --check`；前端代码额外执行 lint、unit 和 build；文档改动额外执行 docs build。具体命令见[常用命令](#常用命令)。
 
 相关规范：[参与贡献](./contributing.md)、[工程信任系统](./engineering-trust.md)、[Yuxi Spec Loop](./spec-loop.md)。

@@ -1,19 +1,12 @@
 # Web 约定
 
-本目录是 Vue 3 / Vite 前端。先阅读根 [AGENTS.md](../AGENTS.md)、[设计规范](../docs/develop-guides/design.md) 和 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+修改本目录时应用根 [AGENTS.md](../AGENTS.md)；UI 改动读取[设计规范](../docs/develop-guides/design.md)相关章节，陌生模块查[架构](../ARCHITECTURE.md)。纯阅读不触发实现或测试流程。
 
-- API 调用统一放在 `src/apis`；组件不直接拼接普通 HTTP 请求。
-- 前端权限与路由守卫只提供体验约束，后端始终执行最终授权。
-- 复用 `src/assets/css/base.css` 变量和 `@lucide/vue`；不为一次性视觉需求引入新依赖。
-- 保持 loading、empty、error、断线恢复和终态投影语义一致；不要用乐观 UI 覆盖 PostgreSQL 返回的最终事实。
-- `pnpm run lint:check` 是只读 gate；`pnpm run lint` 才允许本地自动修复。
+- 普通 HTTP API 统一封装在 `src/apis`，组件不自行拼接。
+- 复用 `src/assets/css/base.css` 变量与 `@lucide/vue`；一次性视觉需求不引入新依赖。
+- 保持 loading、empty、error、断线恢复与终态投影一致；乐观 UI 不覆盖后端最终事实。
+- `pnpm run lint:check` 只读检查，`pnpm run lint` 会修改文件。
 
-提交前运行：
+UI 改动必须启动或复用开发服务并在真实页面验证，适用时覆盖浅/深色、响应式及 loading、empty、error。交付必要的脱敏最终截图或录屏，清理中间截图，不在源码目录遗留产物；无法验证时明确未覆盖范围。
 
-```bash
-docker compose exec web pnpm run lint:check
-docker compose exec web pnpm run test:unit
-docker compose exec web pnpm run build
-```
-
-UI 改动必须在真实页面验证，并提供最终截图或录屏；适用时覆盖浅/深色、响应式、loading、empty 和 error 状态。
+前端代码提交前执行 lint、unit 和 build；命令与证据标准统一见[测试规范](../docs/develop-guides/testing-guidelines.md)。仅修改本目录规则或说明文档时按文档层级验证，根规则的提交前必跑检查仍适用。

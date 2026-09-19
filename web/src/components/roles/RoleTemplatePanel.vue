@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { RefreshCw, Trash2, User } from '@lucide/vue'
 
@@ -141,7 +141,9 @@ const loadRoles = async (append = false) => {
     const response = await roleApi.list(category, offset, PAGE_SIZE)
     const newRoles = response.data || []
     if (append) {
-      roles.value = [...roles.value, ...newRoles]
+      const existingKeys = new Set(roles.value.map(r => r.role_key))
+      const uniqueNew = newRoles.filter(r => !existingKeys.has(r.role_key))
+      roles.value = [...roles.value, ...uniqueNew]
     } else {
       roles.value = newRoles
     }
@@ -162,14 +164,14 @@ const loadRoles = async (append = false) => {
       Object.assign(merged, response.category_counts)
       categoryCounts.value = merged
     }
-    // 内容不满一屏时自动加载下一页
-    checkAutoLoad()
   } catch (error) {
     message.error(error.message || '加载角色失败')
   } finally {
     loading.value = false
     loadingMore.value = false
   }
+  // DOM 更新后检查是否需要自动加载下一页
+  nextTick(() => checkAutoLoad())
 }
 
 const refresh = async () => {

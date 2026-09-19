@@ -86,7 +86,13 @@
             <div v-for="(gv, idx) in globalVariables" :key="idx" class="global-var-item">
               <a-input
                 v-model:value="gv.name"
-                placeholder="变量名"
+                placeholder="变量名（英文）"
+                size="small"
+                @change="markDirty"
+              />
+              <a-input
+                v-model:value="gv.label"
+                placeholder="中文名称"
                 size="small"
                 @change="markDirty"
               />
@@ -147,7 +153,13 @@
                 <div v-for="(v, idx) in variables" :key="idx" class="start-variable-item">
                   <a-input
                     v-model:value="v.name"
-                    placeholder="变量名"
+                    placeholder="变量名（英文）"
+                    size="small"
+                    @change="markDirty"
+                  />
+                  <a-input
+                    v-model:value="v.label"
+                    placeholder="中文名称"
                     size="small"
                     @change="markDirty"
                   />
@@ -206,8 +218,9 @@
                         @click.stop="insertVariable(v.name)"
                         :title="`点击插入 {{${v.name}}}`"
                       >
+                        <span v-if="v.label" class="var-tag-label">{{ v.label }}</span>
                         <span class="var-tag-name">{{ v.name }}</span>
-                        <span v-if="v.desc" class="var-tag-desc">{{ v.desc }}</span>
+                        <span v-if="v.desc && !v.label" class="var-tag-desc">{{ v.desc }}</span>
                       </div>
                     </div>
                   </div>
@@ -264,8 +277,9 @@
                         @click.stop="insertVariable(v.name)"
                         :title="`点击插入 {{${v.name}}}`"
                       >
+                        <span v-if="v.label" class="var-tag-label">{{ v.label }}</span>
                         <span class="var-tag-name">{{ v.name }}</span>
-                        <span v-if="v.desc" class="var-tag-desc">{{ v.desc }}</span>
+                        <span v-if="v.desc && !v.label" class="var-tag-desc">{{ v.desc }}</span>
                       </div>
                     </div>
                   </div>
@@ -537,16 +551,35 @@
                     @change="markDirty"
                   />
                 </a-form-item>
+                <a-form-item label="输出中文名称 (output_label)">
+                  <a-input
+                    v-model:value="selectedStep.output_label"
+                    placeholder="可选，用于在变量选择器中显示中文名称"
+                    @change="markDirty"
+                  />
+                </a-form-item>
 
                 <!-- 循环配置（默认收起） -->
                 <div class="loop-config-section">
                   <div class="loop-config-header" @click="loopConfigExpanded = !loopConfigExpanded">
                     <span class="loop-config-arrow">{{ loopConfigExpanded ? '▾' : '▸' }}</span>
                     <span>循环配置</span>
-                    <span v-if="selectedStep.loop" class="loop-config-badge">已配置</span>
+                    <span v-if="selectedStep.loop && selectedStep.loop.back_to" class="loop-config-badge">已配置</span>
+                    <span v-else-if="selectedStep.loop && !selectedStep.loop.back_to" class="loop-config-badge loop-config-badge--warn">待完善</span>
+                    <span
+                      class="loop-config-help-btn"
+                      @click.stop="showLoopHelp = true"
+                      title="配置指南"
+                    >
+                      <HelpCircle :size="14" />
+                    </span>
                   </div>
                   <div v-if="loopConfigExpanded" class="loop-config-body">
-                    <a-form-item label="回退到步骤">
+                    <div class="loop-config-intro">
+                      <p>循环配置可让步骤执行后回到前面某个步骤重新执行，适用于审批复核、数据校验重试等需要反复迭代的场景。</p>
+                    </div>
+                    <template v-if="selectedStep.loop">
+                    <a-form-item label="回退到步骤" extra="循环结束时将回到该步骤重新执行，不可选择开始/结束节点">
                       <a-select
                         v-model:value="selectedStep.loop.back_to"
                         placeholder="选择循环回退的目标步骤"
@@ -562,7 +595,7 @@
                         </a-select-option>
                       </a-select>
                     </a-form-item>
-                    <a-form-item label="最大循环次数">
+                    <a-form-item label="最大循环次数" extra="防止无限循环的安全上限，达到后强制退出循环（1-20）">
                       <a-input-number
                         v-model:value="selectedStep.loop.max_iterations"
                         :min="1"
@@ -571,7 +604,7 @@
                         @change="markDirty"
                       />
                     </a-form-item>
-                    <a-form-item label="退出条件（可选）">
+                    <a-form-item label="退出条件（可选）" extra="满足条件时提前退出循环，支持变量引用和 contains/equals 等表达式">
                       <div data-var-field="exit_condition">
                         <a-input
                           v-model:value="selectedStep.loop.exit_condition"
@@ -582,7 +615,6 @@
                       </div>
                     </a-form-item>
                     <a-button
-                      v-if="selectedStep.loop"
                       type="text"
                       size="small"
                       danger
@@ -591,8 +623,9 @@
                       <template #icon><Trash2 :size="12" /></template>
                       移除循环配置
                     </a-button>
+                    </template>
                     <a-button
-                      v-else
+                      v-if="!selectedStep.loop"
                       type="dashed"
                       size="small"
                       block
@@ -756,6 +789,49 @@
         <a-spin tip="启动中..." />
       </div>
     </a-modal>
+
+    <!-- 循环配置指南弹窗 -->
+    <a-modal
+      v-model:open="showLoopHelp"
+      title="循环配置指南"
+      :footer="null"
+      :width="560"
+      class="loop-help-modal"
+    >
+      <div class="loop-help-content">
+        <h4>什么是循环配置？</h4>
+        <p>循环配置允许你将某个步骤标记为「循环步骤」，该步骤执行完成后会自动回到前面指定的步骤重新执行，直到满足退出条件或达到最大循环次数。</p>
+
+        <h4>配置项说明</h4>
+        <ul>
+          <li><strong>回退到步骤</strong> — 循环的起点，当前步骤执行完毕后将回到该步骤重新开始。不可选择开始/结束节点。</li>
+          <li><strong>最大循环次数</strong> — 安全上限，防止无限循环。达到上限后无论条件是否满足都会强制退出（范围 1-20）。</li>
+          <li><strong>退出条件</strong> — 可选，填写表达式，当表达式为真时提前退出循环。支持变量引用和 <code>contains</code> / <code>equals</code> 等操作符。</li>
+        </ul>
+
+        <h4>典型场景</h4>
+        <div class="loop-help-example">
+          <div class="loop-help-example-title">场景一：审批复核循环</div>
+          <p>步骤 A（提交申请）→ 步骤 B（审批）→ 步骤 C（复核）</p>
+          <p>在步骤 C 配置循环：回退到步骤 B，退出条件 <code>{{review_result}} contains REJECTED</code>，最大循环 3 次。</p>
+          <p>效果：审批被驳回时回到步骤 B 重新审批，最多重试 3 次。</p>
+        </div>
+        <div class="loop-help-example">
+          <div class="loop-help-example-title">场景二：数据校验重试</div>
+          <p>步骤 A（获取数据）→ 步骤 B（校验）→ 步骤 C（处理）</p>
+          <p>在步骤 B 配置循环：回退到步骤 A，退出条件 <code>{{validation_status}} equals PASS</code>，最大循环 5 次。</p>
+          <p>效果：校验不通过时重新获取数据，最多重试 5 次。</p>
+        </div>
+
+        <h4>注意事项</h4>
+        <ul>
+          <li>循环范围是「回退步骤 → 当前步骤」之间的所有步骤</li>
+          <li>每次循环会重新执行范围内的所有步骤，历史结果会被覆盖</li>
+          <li>建议始终设置合理的最大循环次数，避免无限循环</li>
+          <li>退出条件中可使用 <code>{{ 变量名 }}</code> 引用步骤输出变量</li>
+        </ul>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -767,7 +843,7 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import { ArrowLeft, Play, Save, Plus, Trash2, Inbox, Settings, X, ChevronLeft, ChevronRight, History } from '@lucide/vue'
+import { ArrowLeft, Play, Save, Plus, Trash2, Inbox, Settings, X, ChevronLeft, ChevronRight, History, HelpCircle } from '@lucide/vue'
 import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Flag } from '@lucide/vue'
 import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons-vue'
 import WorkflowNode from '@/components/workflow/WorkflowNode.vue'
@@ -812,6 +888,7 @@ const runInputs = ref({})
 const showSettings = ref(false)
 const stepPanelCollapsed = ref(false)
 const loopConfigExpanded = ref(false)
+const showLoopHelp = ref(false)
 const agentOptions = ref([])
 const showRunResult = ref(false)
 const runResultLoading = ref(true)
@@ -995,18 +1072,7 @@ function scrollToActiveStep() {
 const variables = computed(() => workflow.value?.definition?.variables || [])
 const globalVariables = computed(() => {
   if (!workflow.value?.definition) return []
-  if (!workflow.value.definition.global_variables) {
-    workflow.value.definition.global_variables = []
-  }
-  return workflow.value.definition.global_variables
-})
-const concurrency = computed({
-  get: () => workflow.value?.definition?.concurrency || 4,
-  set: (val) => {
-    if (workflow.value) {
-      workflow.value.definition.concurrency = val
-    }
-  }
+  return workflow.value.definition.global_variables || []
 })
 
 const flowNodes = computed(() => flowElements.value.filter(e => !e.source && !e.target))
@@ -1047,7 +1113,8 @@ const availableVariables = computed(() => {
       label: '开始',
       variables: variables.value.map(v => ({
         name: typeof v === 'string' ? v : v.name,
-        desc: typeof v === 'string' ? '' : (v.description || v.default || '')
+        desc: typeof v === 'string' ? '' : (v.label || v.description || v.default || ''),
+        label: typeof v === 'string' ? '' : (v.label || '')
       }))
     })
   }
@@ -1058,7 +1125,8 @@ const availableVariables = computed(() => {
       label: '全局变量',
       variables: globalVariables.value.map(v => ({
         name: v.name,
-        desc: v.default || ''
+        desc: v.label || v.default || '',
+        label: v.label || ''
       }))
     })
   }
@@ -1074,7 +1142,8 @@ const availableVariables = computed(() => {
     if (step.output_key) {
       upstreamVars.push({
         name: step.output_key,
-        desc: `${step.name || step.id} 的输出`,
+        desc: step.output_label || `${step.name || step.id} 的输出`,
+        label: step.output_label || '',
         stepName: step.name || step.id,
         stepType: step.type
       })
@@ -1087,7 +1156,7 @@ const availableVariables = computed(() => {
     if (!byStep.has(v.stepName)) {
       byStep.set(v.stepName, { label: v.stepName, stepType: v.stepType, variables: [] })
     }
-    byStep.get(v.stepName).variables.push({ name: v.name, desc: v.desc })
+    byStep.get(v.stepName).variables.push({ name: v.name, desc: v.desc, label: v.label })
   }
   groups.push(...byStep.values())
 
@@ -1638,7 +1707,7 @@ const saveWorkflow = async () => {
 }
 
 const addVariable = () => {
-  workflow.value.definition.variables.push({ name: '', default: '' })
+  workflow.value.definition.variables.push({ name: '', label: '', default: '' })
   markDirty()
 }
 
@@ -1659,7 +1728,7 @@ const addGlobalVariable = () => {
   if (!workflow.value.definition.global_variables) {
     workflow.value.definition.global_variables = []
   }
-  workflow.value.definition.global_variables.push({ name: '', default: '' })
+  workflow.value.definition.global_variables.push({ name: '', label: '', default: '' })
   markDirty()
 }
 
@@ -1888,9 +1957,25 @@ function formatRunTime(timeStr) {
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-onMounted(() => {
-  loadWorkflow()
+onMounted(async () => {
+  await loadWorkflow()
   loadAgents()
+  // 支持从定时任务历史跳转查看运行详情：/workflows/:id?run_id=xxx
+  const runId = route.query.run_id
+  if (runId) {
+    showRunResult.value = true
+    runResultLoading.value = true
+    runResultData.value = null
+    try {
+      const res = await workflowApi.getRun(runId)
+      runResultData.value = res.data || res
+      runResultLoading.value = false
+    } catch (e) {
+      console.error('加载运行详情失败:', e)
+      message.error('加载运行详情失败')
+      runResultLoading.value = false
+    }
+  }
 })
 
 const loadAgents = async () => {
@@ -2245,6 +2330,12 @@ const agentFilterOption = (input, option) => {
   font-family: var(--font-mono, monospace);
 }
 
+.var-tag-label {
+  color: var(--gray-600);
+  font-size: 0.9em;
+  margin-right: 4px;
+}
+
 .var-tag-desc {
   color: var(--gray-400);
   font-size: 10px;
@@ -2408,14 +2499,114 @@ const agentFilterOption = (input, option) => {
   padding: 0 6px;
   margin-left: 4px;
   border-radius: 9px;
-  background: var(--primary-1);
-  color: var(--primary-6);
+  background: var(--main-50);
+  color: var(--main-600);
   font-size: 11px;
   font-weight: 500;
 }
 
+.loop-config-badge--warn {
+  background: var(--color-warning-50);
+  color: var(--color-warning-700);
+}
+
+.loop-config-help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border-radius: 50%;
+  color: var(--gray-400);
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: var(--main-600);
+    background: var(--main-50);
+  }
+}
+
+.loop-config-intro {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--gray-50, #fafafa);
+  border-radius: 6px;
+  border: 1px solid var(--gray-100, #f0f0f0);
+
+  p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--gray-500);
+  }
+}
+
 .loop-config-body {
   padding: 8px 0 4px;
+}
+
+/* 循环配置指南弹窗 */
+.loop-help-modal {
+  .ant-modal-body {
+    padding: 16px 24px 24px;
+  }
+}
+
+.loop-help-content {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--gray-700);
+
+  h4 {
+    margin: 16px 0 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--gray-800);
+
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+
+  p {
+    margin: 4px 0;
+  }
+
+  ul {
+    margin: 4px 0 8px;
+    padding-left: 20px;
+  }
+
+  li {
+    margin: 2px 0;
+  }
+
+  code {
+    padding: 1px 5px;
+    background: var(--gray-100, #f5f5f5);
+    border-radius: 3px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12px;
+    color: var(--main-700);
+  }
+
+  .loop-help-example {
+    margin: 8px 0 12px;
+    padding: 10px 14px;
+    background: var(--gray-50, #fafafa);
+    border-radius: 6px;
+    border: 1px solid var(--gray-100, #f0f0f0);
+    font-size: 12px;
+    line-height: 1.7;
+
+    .loop-help-example-title {
+      font-weight: 600;
+      color: var(--gray-700);
+      margin-bottom: 4px;
+    }
+  }
 }
 
 /* 脚本代码编辑区 */

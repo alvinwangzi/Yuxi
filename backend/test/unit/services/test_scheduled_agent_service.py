@@ -103,6 +103,7 @@ def test_scheduled_run_model_uses_unique_thread_per_execution_and_preserves_hist
 def test_execution_projection_reads_terminal_status_from_agent_run():
     scheduled_run = SimpleNamespace(
         status="submitted",
+        target_type="agent",
         to_dict=lambda: {
             "status": "submitted",
             "run_id": None,
@@ -115,6 +116,7 @@ def test_execution_projection_reads_terminal_status_from_agent_run():
         status="failed",
         error_message="模型不可用",
         finished_at=datetime(2026, 8, 27, 10, 0),
+        started_at=datetime(2026, 8, 27, 9, 55),
     )
 
     result = service._execution_to_dict(scheduled_run, request, run)
@@ -124,6 +126,7 @@ def test_execution_projection_reads_terminal_status_from_agent_run():
         "run_id": "run-1",
         "error_message": "模型不可用",
         "completed_at": "2026-08-27T10:00:00Z",
+        "started_at": "2026-08-27T09:55:00Z",
         "conversation_available": True,
     }
 
@@ -131,6 +134,7 @@ def test_execution_projection_reads_terminal_status_from_agent_run():
 def test_execution_projection_does_not_offer_conversation_before_request_exists():
     scheduled_run = SimpleNamespace(
         status="failed",
+        target_type="agent",
         to_dict=lambda: {"status": "failed", "thread_id": "reserved-thread"},
     )
 
@@ -313,3 +317,115 @@ async def test_claim_disables_invalid_schedule_and_continues_to_next_job(monkeyp
     assert invalid.enabled is False
     assert valid.next_run_at == datetime(2026, 8, 28, 9, 0)
     assert commits == 2
+
+
+def test_execution_to_dict_workflow_path_with_workflow_run():
+    """工作流类型且有 workflow_run 时，从 workflow_run 投影状态。"""
+    scheduled_run = SimpleNamespace(
+        status="submitted",
+        target_type="workflow",
+        to_dict=lambda: {
+            "status": "submitted",
+            "run_id": None,
+            "error_message": None,
+            "completed_at": None,
+        },
+    )
+    workflow_run = SimpleNamespace(
+        status="completed",
+        error_message=None,
+        started_at=datetime(2026, 9, 17, 10, 0),
+        completed_at=datetime(2026, 9, 17, 10, 5),
+    )
+
+    result = service._execution_to_dict(scheduled_run, None, None, workflow_run)
+
+    assert result["status"] == "completed"
+    assert result["error_message"] is None
+    assert result["started_at"] == "2026-09-17T10:00:00Z"
+    assert result["completed_at"] == "2026-09-17T10:05:00Z"
+    assert result["conversation_available"] is False
+
+
+def test_execution_to_dict_workflow_path_old_record_unknown():
+    """工作流类型但无 workflow_run（旧记录）时，状态为 unknown。"""
+    scheduled_run = SimpleNamespace(
+        status="submitted",
+        target_type="workflow",
+        to_dict=lambda: {
+            "status": "submitted",
+            "run_id": None,
+            "error_message": None,
+            "completed_at": None,
+        },
+    )
+
+    result = service._execution_to_dict(scheduled_run, None, None, None)
+
+    assert result["status"] == "unknown"
+    assert result["conversation_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_has_active_run_workflow_branch():
+    """工作流类型检查 WorkflowRun 状态判断是否有活动执行。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from yuxi.repositories.scheduled_agent_repository import ScheduledAgentRepository
+
+    db = MagicMock()
+    repo = ScheduledAgentRepository(db)
+
+    # Mock: 无 dispatching 记录
+    db.scalar = AsyncMock(side_effect=[
+        None,  # dispatching check
+        None,  # agent check
+        "wf-run-id",  # workflow check: 有活动工作流
+    ])
+
+    result = await repo.has_active_run("job-1")
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_pagination_offset_beyond_total():
+    """offset >= total 时返回空列表但保留正确 total。"""
+    from unittest.mock import AsyncMock, MagicMock
+    from yuxi.repositories.scheduled_agent_repository import ScheduledAgentRepository
+
+    db = MagicMock()
+    repo = ScheduledAgentRepository(db)
+
+    # Mock: job 存在，total=5，但 offset=10 超出范围
+    job = SimpleNamespace(id="job-1")
+    # 第一次 scalar 返回 job，第二次返回 total count
+    db.scalar = AsyncMock(side_effect=[job, 5])
+
+    rows, total = await repo.list_runs_paginated(
+        job_id="job-1", uid="user-1", limit=20, offset=10
+    )
+
+    assert rows == []
+    assert total == 5
+
+
+@pytest.mark.asyncio
+async def test_list_job_runs_returns_none_for_nonexistent_job(monkeypatch):
+    """任务不存在时 list_job_runs 返回 None。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    db = MagicMock()
+
+    class Repository:
+        async def list_runs_paginated(self, *, job_id, uid, limit, offset):
+            return [], 0
+
+        async def get_job(self, job_id, uid):
+            return None
+
+    monkeypatch.setattr(service, "ScheduledAgentRepository", lambda _db: Repository())
+
+    result = await service.list_job_runs(
+        job_id="nonexistent", user=SimpleNamespace(uid="user-1"), db=db, limit=20, offset=0
+    )
+
+    assert result is None

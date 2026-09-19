@@ -49,7 +49,14 @@ def convert_ao_to_yuxi(ao_wf, yaml_filename):
     yuxi_steps = []
 
     start_step = {"id": "start", "type": "start", "name": "输入"}
-    variables = [{"name": inp.get("name", ""), "default": inp.get("default", "")} for inp in inputs]
+    variables = []
+    for inp in inputs:
+        var = {"name": inp.get("name", ""), "default": inp.get("default", "")}
+        if inp.get("label"):
+            var["label"] = inp["label"]
+        if inp.get("description"):
+            var["description"] = inp["description"]
+        variables.append(var)
     if variables:
         start_step["variables"] = variables
     yuxi_steps.append(start_step)
@@ -69,6 +76,10 @@ def convert_ao_to_yuxi(ao_wf, yaml_filename):
         }
         if ao_step.get("output"):
             yuxi_step["output_key"] = ao_step["output"]
+        if ao_step.get("output_label"):
+            yuxi_step["output_label"] = ao_step["output_label"]
+        if ao_step.get("description"):
+            yuxi_step["description"] = ao_step["description"]
         if ao_step.get("emoji"):
             yuxi_step["icon"] = ao_step["emoji"]
         if ao_step.get("loop") and isinstance(ao_step["loop"], dict):

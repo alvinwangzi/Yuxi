@@ -1027,6 +1027,7 @@ class ScheduledAgentRun(Base):
         UniqueConstraint("thread_id", name="uq_scheduled_agent_runs_thread"),
         Index("ix_scheduled_agent_runs_job_created", "job_id", "created_at"),
         Index("ix_scheduled_agent_runs_dispatching", "status", "created_at"),
+        Index("ix_scheduled_agent_runs_workflow_run", "workflow_run_id"),
     )
 
     id = Column(String(64), primary_key=True)
@@ -1049,6 +1050,12 @@ class ScheduledAgentRun(Base):
     input_variables = Column(JSON_VALUE, nullable=False, default=dict)
     tool_approval_mode = Column(String(32), nullable=False)
     model_spec = Column(String(512), nullable=True)
+    workflow_run_id = Column(
+        Integer,
+        ForeignKey("workflow_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="工作流执行记录 ID；Agent 类型为 null",
+    )
     status = Column(String(32), nullable=False, default="dispatching")
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utc_now_naive, nullable=False)
@@ -1063,6 +1070,7 @@ class ScheduledAgentRun(Base):
             "scheduled_for": format_utc_datetime(self.scheduled_for),
             "target_type": self.target_type,
             "workflow_id": self.workflow_id,
+            "workflow_run_id": self.workflow_run_id,
             "input_variables": self.input_variables or {},
             "status": self.status,
             "run_id": None,

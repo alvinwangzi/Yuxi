@@ -80,48 +80,11 @@ docker compose logs --tail=100 api
 
 ## 4. 检查和测试
 
-先跑与改动最相关的最小集合，再根据风险扩大：
+先按[测试规范的验证矩阵](./testing-guidelines.md#按任务选择验证)选择最小相关集合，再按风险扩大；命令由该文档统一维护。提交前执行其[必跑检查](./testing-guidelines.md#提交前检查)，前端代码额外执行 lint、unit 和 build，UI 改动始终需要真实页面证据。
 
-| 改动 | 最低验证 |
-| --- | --- |
-| 纯 Python/JavaScript 逻辑 | 相关 unit，断言业务结果 |
-| API、权限或持久化 | 真实 HTTP integration |
-| Run、FIFO、SSE、沙盒、恢复或文件 | E2E，核对最终状态和产物 |
-| 前端交互 | lint、unit；重要行为再 build 和真实页面检查 |
-| 文档、导航或链接 | 相对链接检查、文档构建和 `git diff --check` |
+`make format` 会修改工作树，完成后重新查看 diff；只读检查使用相应 check 命令。
 
-后端常用命令：
-
-```bash
-docker compose exec api uv run --group test pytest test/unit -m "not slow"
-docker compose exec api uv run --group test pytest test/integration
-docker compose exec api uv run --group test pytest test/e2e -m e2e
-```
-
-前端常用命令：
-
-```bash
-docker compose exec web pnpm run lint:check
-docker compose exec web pnpm run test:unit
-docker compose exec web pnpm run build
-```
-
-项目统一格式化命令会修改工作树，完成格式化后应重新查看 diff：
-
-```bash
-make format
-```
-
-提交前至少运行仓库信任检查、其单元测试和后端 unit：
-
-```bash
-python3 scripts/verify_engineering_contracts.py
-python3 -m unittest scripts.test_verify_engineering_contracts
-docker compose exec api uv run --group test pytest test/unit -m "not slow"
-git diff --check
-```
-
-如果环境、凭证或外部服务导致某项检查无法执行，在 PR 中写明命令、原因、未验证范围和剩余风险。没有默认数据不是跳过测试的理由，应由 fixture 创建资源。测试“通过”也不能替代对数据库、文件、对象、DOM 或协议结果的回读。
+环境、凭证或外部服务导致检查无法执行时，在 PR 写明命令、原因、未验证范围和剩余风险。Fixture 负责创建测试资源；完成结论须按风险回读数据库、文件、对象、DOM 或协议结果。
 
 ## 5. 提交前 Review
 
@@ -192,14 +155,7 @@ CLI 使用 `packages/yuxi-cli/pyproject.toml` 中的独立版本。需要发布 
 
 文档使用直接、自然的现在时，写明执行者、条件、结果和失败后果。教程要有可观察验收，参考要有默认值和生效时机，机制页要链接源码和验证入口。完整规则见[文档编写与维护规范](./documentation-guidelines.md)。
 
-文档变更至少运行：
-
-```bash
-python3 scripts/verify_engineering_contracts.py
-python3 -m unittest scripts.test_verify_engineering_contracts
-cd docs && pnpm run build
-git diff --check
-```
+文档变更按[测试规范](./testing-guidelines.md)和[文档编写与维护规范](./documentation-guidelines.md)的提交前检查执行。
 
 ## AI 辅助开发
 

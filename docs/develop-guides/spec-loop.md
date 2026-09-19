@@ -4,7 +4,9 @@ Yuxi Spec Loop 把非平凡工程请求从“实现建议”收敛为“可以�
 
 ## 适用范围
 
-开始工作时把请求压缩为：可验证目标、非目标、显式假设、任务类型和风险层级。任务类型只使用 `feature`、`bug-fix`、`simplification`、`architecture`、`process`、`testing`。
+先区分只读分析、环境操作与工程变更。只读查询，以及按既有运行手册执行的已授权操作，按任务验证结果，不自动进入下述实现、决策写作或提交流程。运维若改变 Schema、权限、隔离、外部副作用边界或长期运维策略，仍按非平凡标准升级。
+
+开始工程变更时明确可验证目标、非目标、显式假设、任务类型和风险层级。变更类型只使用 `feature`、`bug-fix`、`simplification`、`architecture`、`process`、`testing`。
 
 满足任一条件即为非平凡（substantial）：改变持久状态或事务发布点；改变权限、隔离、外部副作用或公开兼容；改变 Run/worker/队列/恢复等长生命周期；改变模型可见输入；引入抽象、依赖、配置、fallback、状态机或长期维护表面；接受未来可能重开的非显然取舍。非平凡工作必须在实现前创建 tracked `proposed` decision。
 
@@ -18,15 +20,17 @@ Yuxi Spec Loop 把非平凡工程请求从“实现建议”收敛为“可以�
 
 ### 2. Reconstruct authority
 
-按以下顺序重建当前权威，发现冲突时先确认哪个材料拥有当前事实：
+分别核对"应守约束"和"当前行为证据"，规范定义应守约束，当前装配和直接证据证明实际行为，二者不相互替代：
 
-1. 根与子树 `AGENTS.md`、`ARCHITECTURE.md` 和安全不变量；
+应守约束：
+1. 根与子树 `AGENTS.md`、`ARCHITECTURE.md` 的安全不变量与工程决策记录中的有效约束；
+
+当前行为证据：
 2. 当前公开契约、真实 provider/registration/composition、持久化与用户入口；
 3. 可执行测试、workflow、构建产物和运行时探针；
-4. active decision；
-5. history、archive、changelog 与 `docs/vibe/` 临时材料。
+4. active decision。
 
-后序材料不能静默覆盖前序当前事实；history 只解释来源，不证明现在仍成立。
+history、archive、changelog 与 `docs/vibe/` 临时材料只解释来源，不证明现在仍成立。规范与行为证据冲突时，先确认行为是否违反约束：违反则修复行为，否则更新规范。
 
 ### 3. Propose
 

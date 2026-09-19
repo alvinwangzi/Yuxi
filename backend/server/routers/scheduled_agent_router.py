@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.services.scheduled_agent_service import (
     create_scheduled_job,
     delete_scheduled_job,
+    list_job_runs,
     list_scheduled_jobs,
     run_scheduled_job_now,
     update_scheduled_job,
@@ -149,3 +150,24 @@ async def delete_job(job_id: str, current_user: User = Depends(get_required_user
     if not await delete_scheduled_job(job_id=job_id, user=current_user, db=db):
         raise HTTPException(status_code=404, detail="定时任务不存在")
     return {"deleted": True, "job_id": job_id}
+
+
+@scheduled_agents.get("/{job_id}/runs")
+async def list_runs(
+    job_id: str,
+    limit: int = 20,
+    offset: int = 0,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """按任务分页读取触发历史。"""
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit 必须在 1 到 100 之间")
+    if offset < 0:
+        raise HTTPException(status_code=422, detail="offset 不能为负数")
+    result = await list_job_runs(
+        job_id=job_id, user=current_user, db=db, limit=limit, offset=offset,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="定时任务不存在")
+    return result

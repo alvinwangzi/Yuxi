@@ -115,7 +115,7 @@ Yuxi 采用 [Diátaxis](https://diataxis.fr/) 的四类文档思路。现有目�
 
 ## 修改流程
 
-1. 读取根与子树 `AGENTS.md`、`ARCHITECTURE.md`、当前 Owner 和相关源码。
+1. 读取根与子树 `AGENTS.md`、对应页面类型的写作章节、owning 文档和相关源码。
 2. 写出读者、任务、前置条件、完成标准、非目标和页面类型；非平凡的信息架构或长期约束变化先建立 proposed decision。
 3. 沿入口 → service/executor → repository/发布点 → 用户或模型可见结果核对事实，同时检查权限、失败和可选依赖。
 4. 先列出每节唯一要回答的问题，再按“概念 → 关系 → 状态/Owner → 权限/失败 → 源码定位”展开；教程按完成任务的顺序展开。
@@ -135,13 +135,6 @@ Yuxi 采用 [Diátaxis](https://diataxis.fr/) 的四类文档思路。现有目�
 - 新页面已加入正确导航；页面移动或拆分后没有遗留入站链接。
 - 交付说明如实记录实际运行的命令、结果、未执行项和剩余风险。
 
-至少运行：
-
-```bash
-python3 scripts/verify_engineering_contracts.py
-python3 -m unittest scripts.test_verify_engineering_contracts
-cd docs && pnpm run build
-git diff --check
-```
+文档改动在测试规范[必跑检查](./testing-guidelines.md#提交前检查)基础上额外执行 docs build，具体命令见其[常用命令](./testing-guidelines.md#常用命令)。
 
 外部资料只用于学习文档组织和表达方式。可参考 [Diátaxis](https://diataxis.fr/) 的文档分类，以及 [Write the Docs 入门指南](https://www.writethedocs.org/guide/writing/beginners-guide-to-docs/) 对读者、安装、使用和贡献路径的建议；Yuxi 的当前行为仍以仓库内事实 Owner 为准。

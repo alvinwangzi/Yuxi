@@ -12,6 +12,8 @@ export const scheduledAgentApi = {
   runNow: (jobId, requestId) =>
     apiPost(`/api/scheduled-tasks/${jobId}/run-now`, { request_id: requestId }),
   remove: (jobId) => apiDelete(`/api/scheduled-tasks/${jobId}`),
+  listRuns: (jobId, { limit = 20, offset = 0 } = {}) =>
+    apiGet(`/api/scheduled-tasks/${jobId}/runs?limit=${limit}&offset=${offset}`),
   // 获取可用的工作流列表
   listWorkflows: () => apiGet('/api/workflows/selectable')
 }

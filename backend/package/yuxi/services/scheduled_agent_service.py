@@ -179,19 +179,75 @@ async def list_scheduled_jobs(*, user: User, db: AsyncSession) -> dict:
     repo = ScheduledAgentRepository(db)
     jobs = await repo.list_jobs(str(user.uid))
     runs_by_job: dict[str, list[dict]] = {job.id: [] for job in jobs}
-    for scheduled_run, request, run in await repo.list_recent_runs([job.id for job in jobs], str(user.uid), 3):
-        runs_by_job[scheduled_run.job_id].append(_execution_to_dict(scheduled_run, request, run))
+    for scheduled_run, request, run, wf_run in await repo.list_recent_runs(
+        [job.id for job in jobs], str(user.uid), 3
+    ):
+        runs_by_job[scheduled_run.job_id].append(
+            _execution_to_dict(scheduled_run, request, run, wf_run)
+        )
+    # 批量查找每个任务的最近实际执行
+    last_executions = await repo.get_last_execution([job.id for job in jobs])
     result = []
     for job in jobs:
         item = job.to_dict()
         item["runs"] = runs_by_job[job.id]
+        last = last_executions.get(job.id)
+        if last:
+            item["last_execution"] = _execution_to_dict(
+                last["scheduled_run"],
+                last["request"],
+                last["run"],
+                last["workflow_run"],
+            )
+        else:
+            item["last_execution"] = None
         result.append(item)
     return {"jobs": result}
 
 
-def _execution_to_dict(scheduled_run, request, run) -> dict:
-    """以 Request/Run 为执行状态事实源，装配调度记录摘要。"""
+async def list_job_runs(
+    *,
+    job_id: str,
+    user: User,
+    db: AsyncSession,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict | None:
+    """按任务分页读取触发历史。"""
+    repo = ScheduledAgentRepository(db)
+    rows, total = await repo.list_runs_paginated(
+        job_id=job_id, uid=str(user.uid), limit=limit, offset=offset,
+    )
+    # 确认任务存在（list_runs_paginated 已做归属校验）
+    if total == 0:
+        job = await repo.get_job(job_id, str(user.uid))
+        if job is None:
+            return None
+    runs = [_execution_to_dict(sar, req, run, wf_run) for sar, req, run, wf_run in rows]
+    return {"runs": runs, "total": total}
+
+
+def _execution_to_dict(scheduled_run, request, run, workflow_run=None) -> dict:
+    """以 Request/Run 或 WorkflowRun 为执行状态事实源，装配调度记录摘要。"""
     data = scheduled_run.to_dict()
+    is_workflow = scheduled_run.target_type == "workflow"
+
+    if is_workflow:
+        # 工作流执行路径
+        data["conversation_available"] = False
+        if scheduled_run.status != "submitted":
+            return data
+        if workflow_run is not None:
+            data["status"] = workflow_run.status
+            data["error_message"] = workflow_run.error_message
+            data["started_at"] = format_utc_datetime(workflow_run.started_at)
+            data["completed_at"] = format_utc_datetime(workflow_run.completed_at)
+            return data
+        # 旧记录无 workflow_run_id，无法确认实际状态
+        data["status"] = "unknown"
+        return data
+
+    # Agent 执行路径
     data["conversation_available"] = request is not None
     if scheduled_run.status != "submitted" or request is None:
         return data
@@ -205,6 +261,7 @@ def _execution_to_dict(scheduled_run, request, run) -> dict:
     data["status"] = run.status
     data["error_message"] = run.error_message
     data["completed_at"] = format_utc_datetime(run.finished_at)
+    data["started_at"] = format_utc_datetime(run.started_at)
     return data
 
 
@@ -436,6 +493,7 @@ async def _settle_dispatch_error(
             return None
         request = None
         run = None
+        wf_run = None
         if scheduled_run.status == "dispatching":
             request, run = await ScheduledAgentRepository(db).get_request_and_run(scheduled_run.request_id)
             if request is not None:
@@ -443,9 +501,11 @@ async def _settle_dispatch_error(
             elif terminal:
                 scheduled_run.status = "failed"
                 scheduled_run.error_message = str(error)
-            if request is not None or terminal:
+            if scheduled_run.workflow_run_id is not None:
+                wf_run = await db.get(WorkflowRun, scheduled_run.workflow_run_id)
+            if request is not None or wf_run is not None or terminal:
                 await db.commit()
-        return _execution_to_dict(scheduled_run, request, run)
+        return _execution_to_dict(scheduled_run, request, run, wf_run)
 
 
 async def dispatch_scheduled_run(*, scheduled_run_id: str) -> dict | None:
@@ -509,8 +569,15 @@ async def dispatch_scheduled_run(*, scheduled_run_id: str) -> dict | None:
             scheduled_run.status = "submitted"
             job.updated_at = utc_now_naive()
             await db.commit()
-            request, run = await ScheduledAgentRepository(db).get_request_and_run(scheduled_run.request_id)
-            return _execution_to_dict(scheduled_run, request, run)
+            # 按执行类型读取实际状态
+            wf_run = None
+            request = None
+            run = None
+            if scheduled_run.target_type == "workflow" and scheduled_run.workflow_run_id is not None:
+                wf_run = await db.get(WorkflowRun, scheduled_run.workflow_run_id)
+            else:
+                request, run = await ScheduledAgentRepository(db).get_request_and_run(scheduled_run.request_id)
+            return _execution_to_dict(scheduled_run, request, run, wf_run)
     except HTTPException as exc:
         settled = await _settle_dispatch_error(scheduled_run_id, exc, terminal=True)
         if settled is None:
@@ -538,16 +605,25 @@ async def _dispatch_workflow_run(
     if not workflow:
         raise HTTPException(status_code=404, detail="工作流不存在")
 
-    # 创建工作流运行记录
+    # 复用已绑定的运行 ID（重试/恢复场景）
+    if scheduled_run.workflow_run_id is not None:
+        existing_run = await db.get(WorkflowRun, scheduled_run.workflow_run_id)
+        if existing_run is not None:
+            return
+
+    # 创建工作流运行记录，输入使用 scheduled_run 的快照
     workflow_run = WorkflowRun(
         workflow_id=workflow.id,
         status="pending",
         trigger="scheduled",
-        input_variables=job.input_variables or {},
+        input_variables=scheduled_run.input_variables or {},
         context={},
         created_by=str(user.uid),
     )
     workflow_run = await workflow_repo.create_run(workflow_run)
+    # 绑定到调度记录，立即 flush 确保持久化
+    scheduled_run.workflow_run_id = workflow_run.id
+    await db.flush()
 
     # 提交工作流执行
     await submit_workflow_run(db, workflow_run.id)

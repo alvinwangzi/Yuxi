@@ -164,7 +164,12 @@ class WorkflowEngine:
         loop_counts: dict[str, int],
         db_session=None,
     ) -> None:
-        """执行一个 DAG 层级 — 同层步骤并行。"""
+        """执行一个 DAG 层级 — 同层步骤并行。
+
+        每个步骤使用独立的 db session 执行，避免并行步骤共享同一 async session
+        导致 SQLAlchemy 并发冲突（"concurrent operations are not permitted"）。
+        主 db_session 仅由回调（已加锁）使用。
+        """
         if not layer.nodes:
             return
 
@@ -175,15 +180,24 @@ class WorkflowEngine:
         async def _run_step(node):
             try:
                 async with semaphore:
-                    await self._execute_step(
-                        step_data=step_index[node.id],
-                        context=context,
-                        layer_index=layer.index,
-                        step_results=step_results,
-                        step_errors=step_errors,
-                        loop_counts=loop_counts,
-                        db_session=db_session,
-                    )
+                    # 为每个步骤创建独立的 db session，避免并行步骤共享同一 session
+                    step_session = None
+                    if db_session is not None:
+                        from yuxi.storage.postgres.manager import pg_manager
+                        step_session = pg_manager.AsyncSession()
+                    try:
+                        await self._execute_step(
+                            step_data=step_index[node.id],
+                            context=context,
+                            layer_index=layer.index,
+                            step_results=step_results,
+                            step_errors=step_errors,
+                            loop_counts=loop_counts,
+                            db_session=step_session,
+                        )
+                    finally:
+                        if step_session is not None:
+                            await step_session.close()
             except Exception as e:
                 # 捕获任务级别的异常，确保不影响同层其他步骤
                 if node.id not in step_errors:

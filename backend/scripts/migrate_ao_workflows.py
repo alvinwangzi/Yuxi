@@ -97,10 +97,15 @@ def convert_ao_to_yuxi(ao_workflow: dict, yaml_filename: str) -> dict:
     # 将 AO inputs 转为 Yuxi variables
     variables = []
     for inp in inputs:
-        variables.append({
+        var = {
             "name": inp.get("name", ""),
             "default": inp.get("default", ""),
-        })
+        }
+        if inp.get("label"):
+            var["label"] = inp["label"]
+        if inp.get("description"):
+            var["description"] = inp["description"]
+        variables.append(var)
     if variables:
         start_step["variables"] = variables
     yuxi_steps.append(start_step)
@@ -123,9 +128,15 @@ def convert_ao_to_yuxi(ao_workflow: dict, yaml_filename: str) -> dict:
             "depends_on": deps,
         }
 
-        # output → output_key
+        # output → output_key + output_label
         if ao_step.get("output"):
             yuxi_step["output_key"] = ao_step["output"]
+        if ao_step.get("output_label"):
+            yuxi_step["output_label"] = ao_step["output_label"]
+
+        # description
+        if ao_step.get("description"):
+            yuxi_step["description"] = ao_step["description"]
 
         # emoji → icon
         if ao_step.get("emoji"):
