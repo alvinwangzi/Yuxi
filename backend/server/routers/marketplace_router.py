@@ -2,20 +2,20 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from yuxi.auth.dependencies import get_current_user
+from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
 from yuxi.marketplace.service import MarketplaceService
 from yuxi.marketplace.repository import MarketplaceRepository
-from yuxi.storage.postgres.session import get_async_session
+from yuxi.storage.postgres.models_business import User
 
 router = APIRouter(prefix="/api/marketplace", tags=["marketplace"])
 
 
 async def get_marketplace_service(
-    session: AsyncSession = Depends(get_async_session),
+    db: AsyncSession = Depends(get_db),
 ) -> MarketplaceService:
     """获取市场服务依赖"""
-    repo = MarketplaceRepository(session)
-    return MarketplaceService(repo, session)
+    repo = MarketplaceRepository(db)
+    return MarketplaceService(repo, db)
 
 
 @router.get("/entries")
@@ -25,7 +25,7 @@ async def list_market_entries(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_required_user),
 ):
     """获取市场条目列表"""
     result = await service.list_market_entries(
@@ -41,7 +41,7 @@ async def list_market_entries(
 async def get_market_entry_detail(
     slug: str,
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_required_user),
 ):
     """获取市场条目详情"""
     result = await service.get_market_entry_detail(slug)
@@ -54,7 +54,7 @@ async def get_market_entry_detail(
 async def install_market_skill(
     slug: str,
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_required_user),
 ):
     """安装市场技能"""
     try:
@@ -70,12 +70,9 @@ async def install_market_skill(
 @router.get("/submissions/pending")
 async def list_pending_submissions(
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_admin_user),
 ):
     """获取待审批列表（管理员）"""
-    if not getattr(current_user, "is_admin", False):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-    
     submissions = await service.repo.list_pending_submissions()
     return {"success": True, "data": [s.to_dict() for s in submissions]}
 
@@ -84,14 +81,14 @@ async def list_pending_submissions(
 async def submit_skill_to_market(
     body: dict,
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_required_user),
 ):
     """提交个人技能到市场"""
     required = ["original_skill_id", "title", "description", "change_type"]
     for field in required:
         if field not in body:
             raise HTTPException(status_code=400, detail=f"缺少必填字段: {field}")
-    
+
     try:
         result = await service.submit_skill_to_market(
             original_skill_id=body["original_skill_id"],
@@ -112,12 +109,9 @@ async def approve_submission(
     submission_id: int,
     body: dict,
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_admin_user),
 ):
     """审批通过"""
-    if not getattr(current_user, "is_admin", False):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-    
     try:
         result = await service.approve_submission(
             submission_id=submission_id,
@@ -134,12 +128,9 @@ async def reject_submission(
     submission_id: int,
     body: dict,
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_admin_user),
 ):
     """审批驳回"""
-    if not getattr(current_user, "is_admin", False):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-    
     try:
         result = await service.reject_submission(
             submission_id=submission_id,
@@ -155,12 +146,9 @@ async def reject_submission(
 async def unpublish_entry(
     slug: str,
     service: MarketplaceService = Depends(get_marketplace_service),
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_admin_user),
 ):
     """下架技能（管理员）"""
-    if not getattr(current_user, "is_admin", False):
-        raise HTTPException(status_code=403, detail="需要管理员权限")
-    
     try:
         result = await service.unpublish_entry(slug=slug, admin_uid=current_user.uid)
         return {"success": True, "data": result}
