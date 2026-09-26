@@ -766,7 +766,28 @@
               <span class="run-result-step-name">{{ stepNameMap[sr.step_id] || sr.step_id }}</span>
             </div>
             <div v-if="hasStepOutput(sr)" class="run-result-step-output">
-              <pre>{{ formatRunOutput(sr.output_payload || sr.output) }}</pre>
+              <div class="run-result-output-toolbar">
+                <a-button
+                  type="text"
+                  size="small"
+                  @click="toggleRawOutput(sr.id)"
+                  :title="rawOutputSteps.has(sr.id) ? '切换为渲染视图' : '查看原始数据'"
+                >
+                  <template #icon><Code2 :size="14" /></template>
+                  {{ rawOutputSteps.has(sr.id) ? '渲染视图' : '原始数据' }}
+                </a-button>
+              </div>
+              <div v-if="rawOutputSteps.has(sr.id)" class="run-result-output-raw">
+                <pre>{{ formatRunOutput(sr.output_payload || sr.output) }}</pre>
+              </div>
+              <div v-else class="run-result-output-rendered">
+                <MarkdownPreview
+                  v-if="parseOutputContent(sr.output_payload || sr.output).isMarkdown"
+                  :content="parseOutputContent(sr.output_payload || sr.output).text"
+                  compact
+                />
+                <pre v-else>{{ formatRunOutput(sr.output_payload || sr.output) }}</pre>
+              </div>
             </div>
             <div v-if="sr.error_message" class="run-result-step-error">{{ sr.error_message }}</div>
           </div>
@@ -779,7 +800,28 @@
               <span class="run-result-step-name">{{ key }}</span>
             </div>
             <div class="run-result-step-output">
-              <pre>{{ formatRunOutput(val) }}</pre>
+              <div class="run-result-output-toolbar">
+                <a-button
+                  type="text"
+                  size="small"
+                  @click="toggleRawOutput('ctx-' + key)"
+                  :title="rawOutputSteps.has('ctx-' + key) ? '切换为渲染视图' : '查看原始数据'"
+                >
+                  <template #icon><Code2 :size="14" /></template>
+                  {{ rawOutputSteps.has('ctx-' + key) ? '渲染视图' : '原始数据' }}
+                </a-button>
+              </div>
+              <div v-if="rawOutputSteps.has('ctx-' + key)" class="run-result-output-raw">
+                <pre>{{ formatRunOutput(val) }}</pre>
+              </div>
+              <div v-else class="run-result-output-rendered">
+                <MarkdownPreview
+                  v-if="parseOutputContent(val).isMarkdown"
+                  :content="parseOutputContent(val).text"
+                  compact
+                />
+                <pre v-else>{{ formatRunOutput(val) }}</pre>
+              </div>
             </div>
           </div>
         </div>
@@ -848,6 +890,7 @@ import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Flag } from '@lu
 import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons-vue'
 import WorkflowNode from '@/components/workflow/WorkflowNode.vue'
 import WorkflowEdge from '@/components/workflow/WorkflowEdge.vue'
+import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { workflowApi } from '@/apis/workflow_api'
 import { agentApi } from '@/apis/agent_api'
 
@@ -898,6 +941,7 @@ const showRunHistory = ref(false)
 const runHistoryLoading = ref(false)
 const runHistoryList = ref([])
 const cancellingRun = ref(false)
+const rawOutputSteps = ref(new Set())
 const agentSelectOptions = computed(() =>
   agentOptions.value.map(a => ({
     value: a.slug,
@@ -1813,6 +1857,7 @@ const handleRun = async () => {
     showRunModal.value = false
     // 打开结果弹窗并开始轮询
     showRunResult.value = true
+    rawOutputSteps.value = new Set()
     runResultLoading.value = true
     runResultData.value = null
     pollRunResult(runData.id)
@@ -1868,6 +1913,7 @@ function onRunResultClose() {
     clearInterval(runPollTimer)
     runPollTimer = null
   }
+  rawOutputSteps.value = new Set()
 }
 
 /** 强制终止卡住的工作流运行 */
@@ -1918,6 +1964,31 @@ function formatRunOutput(val) {
   if (val === null || val === undefined) return ''
   if (typeof val === 'string') return val
   return JSON.stringify(val, null, 2)
+}
+
+function parseOutputContent(val) {
+  if (val === null || val === undefined) return { text: '', isMarkdown: false }
+  let obj = val
+  if (typeof val === 'string') {
+    try { obj = JSON.parse(val) } catch { return { text: val, isMarkdown: false } }
+  }
+  if (typeof obj === 'object' && obj !== null) {
+    if (typeof obj.content === 'string') {
+      const fmt = String(obj.format || '').toLowerCase()
+      return { text: obj.content, isMarkdown: fmt === 'markdown' || !fmt }
+    }
+    return { text: JSON.stringify(obj, null, 2), isMarkdown: false }
+  }
+  return { text: String(obj), isMarkdown: false }
+}
+
+function toggleRawOutput(stepId) {
+  if (rawOutputSteps.value.has(stepId)) {
+    rawOutputSteps.value.delete(stepId)
+  } else {
+    rawOutputSteps.value.add(stepId)
+  }
+  rawOutputSteps.value = new Set(rawOutputSteps.value)
 }
 
 const openRunHistory = async () => {
@@ -2853,7 +2924,29 @@ const agentFilterOption = (input, option) => {
   color: var(--gray-700);
 }
 
-.run-result-step-output pre {
+.run-result-step-output {
+  margin-top: 6px;
+}
+
+.run-result-output-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.run-result-output-toolbar .ant-btn {
+  color: var(--gray-500);
+  font-size: 12px;
+  height: 24px;
+  padding: 0 6px;
+}
+
+.run-result-output-toolbar .ant-btn:hover {
+  color: var(--gray-700);
+}
+
+.run-result-output-raw pre,
+.run-result-output-rendered pre {
   margin: 0;
   padding: 8px 10px;
   font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
@@ -2862,10 +2955,14 @@ const agentFilterOption = (input, option) => {
   color: var(--gray-700);
   background: #fff;
   border-radius: 4px;
-  max-height: 200px;
+  max-height: 400px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.run-result-output-rendered .yk-markdown-preview {
+  padding: 4px 0;
 }
 
 .run-result-step-error {

@@ -20,6 +20,7 @@ from yuxi.models.providers.repository import (
     get_model_provider_with_tombstone,
     list_model_providers,
     purge_model_provider,
+    restore_model_provider,
     update_model_provider,
 )
 from yuxi.storage.postgres.models_business import ModelProvider
@@ -321,6 +322,11 @@ async def get_all_model_providers(db: AsyncSession) -> list[ModelProvider]:
     return await list_model_providers(db)
 
 
+async def get_all_model_providers_with_tombstones(db: AsyncSession) -> list[ModelProvider]:
+    """获取全部独立模型供应商配置，包含已删除的内置墓碑行。"""
+    return await list_model_providers(db, include_tombstones=True)
+
+
 async def get_model_provider_by_id(db: AsyncSession, provider_id: str) -> ModelProvider | None:
     """按 provider_id 获取独立模型供应商配置。"""
     return await get_model_provider(db, provider_id)
@@ -434,6 +440,18 @@ async def delete_provider_config(db: AsyncSession, provider_id: str) -> bool:
         return False
     await delete_model_provider(db, provider)
     return True
+
+
+async def restore_provider_config(db: AsyncSession, provider_id: str) -> ModelProvider | None:
+    """恢复已删除的内置供应商。"""
+    provider = await get_model_provider_with_tombstone(db, provider_id)
+    if provider is None:
+        return None
+    if provider.deleted_at is None:
+        return provider  # 未删除，直接返回
+    if not provider.is_builtin:
+        raise ValueError("仅支持恢复内置供应商")
+    return await restore_model_provider(db, provider)
 
 
 async def _fetch_models_from_endpoint(

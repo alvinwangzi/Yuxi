@@ -14,7 +14,9 @@ from yuxi.models.providers.service import (
     delete_provider_config,
     fetch_remote_models,
     get_all_model_providers,
+    get_all_model_providers_with_tombstones,
     get_model_provider_by_id,
+    restore_provider_config,
     test_model_status_by_spec,
     update_provider_config,
 )
@@ -65,8 +67,8 @@ async def list_providers(
     current_user: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取独立模型供应商配置列表。"""
-    providers = await get_all_model_providers(db)
+    """获取独立模型供应商配置列表（包含已删除的内置供应商，供前端展示恢复入口）。"""
+    providers = await get_all_model_providers_with_tombstones(db)
     data = []
     for p in providers:
         d = p.to_dict()
@@ -163,6 +165,24 @@ async def delete_provider(
     """删除独立模型供应商配置。"""
     deleted = await delete_provider_config(db, provider_id)
     if not deleted:
+        raise HTTPException(status_code=404, detail=f"供应商 {provider_id} 不存在")
+    await db.commit()
+    await _refresh_model_cache()
+    return {"success": True}
+
+
+@model_providers.post("/{provider_id}/restore")
+async def restore_provider(
+    provider_id: str,
+    current_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """恢复已删除的内置供应商。"""
+    try:
+        provider = await restore_provider_config(db, provider_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if provider is None:
         raise HTTPException(status_code=404, detail=f"供应商 {provider_id} 不存在")
     await db.commit()
     await _refresh_model_cache()

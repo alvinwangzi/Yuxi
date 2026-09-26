@@ -163,7 +163,8 @@ async def test_missing_final_checkpoint_cannot_publish_finished(monkeypatch, mod
     _patch_stream_scaffolding(monkeypatch, agent=agent, save_messages=saved)
     monkeypatch.setattr(agent, "stream_messages_with_state", original)
     monkeypatch.setattr(agent, "stream_resume_with_state", original)
-    monkeypatch.setattr(svc, "save_partial_message", AsyncMock())
+    partial_saved = AsyncMock()
+    monkeypatch.setattr(svc, "save_partial_message", partial_saved)
 
     @asynccontextmanager
     async def error_session():
@@ -193,7 +194,9 @@ async def test_missing_final_checkpoint_cannot_publish_finished(monkeypatch, mod
     )
     chunks = [json.loads(chunk) async for chunk in stream]
     assert chunks[-1]["status"] == "error"
-    assert "checkpoint" in json.dumps(chunks[-1], ensure_ascii=False)
+    # 原始错误全文只进入 error_detail 供排查，用户可见文案不得包含原始错误。
+    assert "checkpoint" in partial_saved.await_args.kwargs["error_detail"]
+    assert "checkpoint" not in json.dumps(chunks[-1], ensure_ascii=False)
     assert all(chunk["status"] != "finished" for chunk in chunks)
     saved.assert_not_awaited()
 

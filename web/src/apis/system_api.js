@@ -117,6 +117,10 @@ export const modelProviderApi = {
     return apiAdminDelete(`/api/system/model-providers/${encodeURIComponent(providerId)}`)
   },
 
+  restoreProvider: async (providerId) => {
+    return apiAdminPost(`/api/system/model-providers/${encodeURIComponent(providerId)}/restore`)
+  },
+
   fetchRemoteModels: async (providerId) => {
     return apiAdminGet(
       `/api/system/model-providers/${encodeURIComponent(providerId)}/remote-models`

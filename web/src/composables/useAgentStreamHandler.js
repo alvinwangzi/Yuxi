@@ -87,7 +87,7 @@ export function useAgentStreamHandler({
    * @returns {Boolean} - Returns true if processing should stop (e.g. error, finished, interrupted)
    */
   const handleStreamChunk = (chunk, threadId) => {
-    const { status, msg, request_id, message: chunkMessage } = chunk
+    const { status, msg, request_id, message: chunkMessage, error_message: chunkErrorMessage } = chunk
     const threadState = getThreadState(threadId)
 
     if (!threadState) return false
@@ -172,7 +172,7 @@ export function useAgentStreamHandler({
 
       case 'error':
         streamSmoother?.flushThread(threadId)
-        handleChatError({ message: chunkMessage }, 'stream')
+        handleChatError({ message: chunkErrorMessage || chunkMessage }, 'stream')
         // Stop the loading indicator
         if (threadState) {
           threadState.isStreaming = false

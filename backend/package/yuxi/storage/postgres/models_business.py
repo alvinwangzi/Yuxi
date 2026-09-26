@@ -858,6 +858,7 @@ class ModelProvider(Base):
             "is_enabled": bool(self.is_enabled),
             "is_builtin": bool(self.is_builtin),
             "include_user_uid": bool(self.include_user_uid),
+            "deleted_at": format_utc_datetime(self.deleted_at),
             "created_by": self.created_by,
             "updated_by": self.updated_by,
             "created_at": format_utc_datetime(self.created_at),

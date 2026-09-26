@@ -16,6 +16,7 @@ import {
   FileText,
   LayersPlus,
   LoaderCircle,
+  RotateCcw,
   Zap
 } from '@lucide/vue'
 
@@ -151,28 +152,42 @@ const filteredProviders = computed(() => {
   })
 })
 
-const enabledProviders = computed(() => filteredProviders.value.filter((p) => p.is_enabled))
-const disabledProviders = computed(() => filteredProviders.value.filter((p) => !p.is_enabled))
+const activeProviders = computed(() =>
+  filteredProviders.value.filter((p) => !p.deleted_at)
+)
+const deletedProviders = computed(() =>
+  providers.value.filter((p) => p.deleted_at && p.is_builtin)
+)
+const enabledProviders = computed(() => activeProviders.value.filter((p) => p.is_enabled))
+const disabledProviders = computed(() => activeProviders.value.filter((p) => !p.is_enabled))
 
 // 自托管 vs 公网供应商分组
 const SELF_HOSTED_IDS = new Set(['ollama', 'vllm', 'localai'])
-const selfHostedProviders = computed(() => filteredProviders.value.filter((p) => SELF_HOSTED_IDS.has(p.provider_id)))
-const cloudProviders = computed(() => filteredProviders.value.filter((p) => !SELF_HOSTED_IDS.has(p.provider_id)))
+const selfHostedProviders = computed(() => activeProviders.value.filter((p) => SELF_HOSTED_IDS.has(p.provider_id)))
+const cloudProviders = computed(() => activeProviders.value.filter((p) => !SELF_HOSTED_IDS.has(p.provider_id)))
 const cloudEnabledProviders = computed(() => cloudProviders.value.filter((p) => p.is_enabled))
 const cloudDisabledProviders = computed(() => cloudProviders.value.filter((p) => !p.is_enabled))
+
+// 已删除的内置供应商分组
+const deletedSelfHostedProviders = computed(() =>
+  deletedProviders.value.filter((p) => SELF_HOSTED_IDS.has(p.provider_id))
+)
+const deletedCloudProviders = computed(() =>
+  deletedProviders.value.filter((p) => !SELF_HOSTED_IDS.has(p.provider_id))
+)
 
 const providerStats = computed(() => {
   let enabled = 0,
     warning = 0,
     models = 0
-  for (const p of providers.value) {
+  for (const p of activeProviders.value) {
     if (p.is_enabled) {
       enabled++
       if (p.credential_status === 'warning') warning++
     }
     models += p.enabled_models?.length || 0
   }
-  return { total: providers.value.length, enabled, warning, models }
+  return { total: activeProviders.value.length, enabled, warning, models }
 })
 
 // ============ Helpers ============
@@ -519,6 +534,16 @@ const deleteProviderFromEdit = async () => {
   }
 }
 
+const restoreProvider = async (provider) => {
+  try {
+    await modelProviderApi.restoreProvider(provider.provider_id)
+    message.success(`已恢复 ${provider.display_name}`)
+    await loadProviders()
+  } catch (error) {
+    message.error(error.message || '恢复失败')
+  }
+}
+
 // ============ Models Modal Operations ============
 const openModelsModal = (provider) => {
   currentProviderForModels.value = provider
@@ -785,7 +810,7 @@ defineExpose({
     </PageShoulder>
 
     <div
-      v-if="!loading && enabledProviders.length === 0 && disabledProviders.length === 0"
+      v-if="!loading && enabledProviders.length === 0 && disabledProviders.length === 0 && deletedProviders.length === 0"
       class="provider-empty-state"
     >
       <a-empty
@@ -907,6 +932,76 @@ defineExpose({
             </span>
           </template>
         </InfoCard>
+      </ExtensionCardGrid>
+
+      <!-- 已删除的内置供应商（自托管） -->
+      <div v-if="deletedSelfHostedProviders.length" class="provider-section-header deleted-section-header">
+        已删除 · 自托管（{{ deletedSelfHostedProviders.length }}）
+      </div>
+      <ExtensionCardGrid v-if="deletedSelfHostedProviders.length" :min-width="320">
+        <div
+          v-for="provider in deletedSelfHostedProviders"
+          :key="provider.provider_id"
+          class="deleted-provider-card"
+        >
+          <div class="deleted-provider-card-inner">
+            <span
+              class="provider-avatar deleted-avatar"
+              role="img"
+              :aria-label="`${provider.display_name} 图标`"
+              :style="{
+                background: getProviderAvatar(provider).background,
+                '--provider-avatar-scale': getProviderAvatar(provider).scale,
+                '--provider-avatar-filter': 'grayscale(1) opacity(0.5)'
+              }"
+            >
+              <img :src="getProviderAvatar(provider).icon" alt="" />
+            </span>
+            <div class="deleted-provider-info">
+              <div class="deleted-provider-name">{{ provider.display_name }}</div>
+              <div class="deleted-provider-id">{{ provider.provider_id }}</div>
+            </div>
+            <button class="restore-btn" type="button" @click="restoreProvider(provider)">
+              <RotateCcw :size="14" />
+              恢复
+            </button>
+          </div>
+        </div>
+      </ExtensionCardGrid>
+
+      <!-- 已删除的内置供应商（云端） -->
+      <div v-if="deletedCloudProviders.length" class="provider-section-header deleted-section-header">
+        已删除 · 云端（{{ deletedCloudProviders.length }}）
+      </div>
+      <ExtensionCardGrid v-if="deletedCloudProviders.length" :min-width="320">
+        <div
+          v-for="provider in deletedCloudProviders"
+          :key="provider.provider_id"
+          class="deleted-provider-card"
+        >
+          <div class="deleted-provider-card-inner">
+            <span
+              class="provider-avatar deleted-avatar"
+              role="img"
+              :aria-label="`${provider.display_name} 图标`"
+              :style="{
+                background: getProviderAvatar(provider).background,
+                '--provider-avatar-scale': getProviderAvatar(provider).scale,
+                '--provider-avatar-filter': 'grayscale(1) opacity(0.5)'
+              }"
+            >
+              <img :src="getProviderAvatar(provider).icon" alt="" />
+            </span>
+            <div class="deleted-provider-info">
+              <div class="deleted-provider-name">{{ provider.display_name }}</div>
+              <div class="deleted-provider-id">{{ provider.provider_id }}</div>
+            </div>
+            <button class="restore-btn" type="button" @click="restoreProvider(provider)">
+              <RotateCcw :size="14" />
+              恢复
+            </button>
+          </div>
+        </div>
       </ExtensionCardGrid>
     </template>
 
@@ -1576,6 +1671,75 @@ defineExpose({
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.4px;
+}
+
+.deleted-section-header {
+  color: var(--gray-400);
+}
+
+.deleted-provider-card {
+  opacity: 0.55;
+  border-radius: 10px;
+  border: 1px dashed var(--gray-300);
+  background: var(--gray-50);
+  padding: 14px 16px;
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.deleted-provider-card:hover {
+  opacity: 0.75;
+  border-color: var(--gray-400);
+}
+
+.deleted-provider-card-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.deleted-avatar {
+  flex-shrink: 0;
+}
+
+.deleted-provider-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.deleted-provider-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gray-500);
+  text-decoration: line-through;
+  text-decoration-color: var(--gray-400);
+}
+
+.deleted-provider-id {
+  font-size: 12px;
+  color: var(--gray-400);
+  margin-top: 2px;
+}
+
+.restore-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.restore-btn:hover {
+  border-color: var(--primary-color, #1677ff);
+  color: var(--primary-color, #1677ff);
+  background: var(--primary-bg, rgba(22, 119, 255, 0.06));
 }
 
 .provider-empty-state {

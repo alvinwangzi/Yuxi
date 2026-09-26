@@ -43,6 +43,7 @@ from yuxi.services.langfuse_service import (
     flush_langfuse,
     get_trace_info,
 )
+from yuxi.services.model_error_messages import friendly_model_error
 from yuxi.services.model_message_audit_service import ModelMessageAuditCollector
 from yuxi.services.run_queue_service import publish_cancel_signals
 from yuxi.services.subagent_run_service import serialize_subagent_run_state
@@ -524,6 +525,7 @@ async def save_partial_message(
     full_msg=None,
     error_message: str | None = None,
     error_type: str = "interrupted",
+    error_detail: str | None = None,
     trace_info: dict[str, Any] | None = None,
     run_id: str | None = None,
     request_id: str | None = None,
@@ -546,6 +548,9 @@ async def save_partial_message(
 
         if trace_info:
             extra_metadata.update(trace_info)
+
+        if error_detail:
+            extra_metadata["error_detail"] = error_detail
 
         run_repo = AgentRunRepository(conv_repo.db) if run_id else None
         if run_id:
@@ -1286,7 +1291,7 @@ async def stream_agent_chat(
     except Exception as e:
         logger.exception(f"Error streaming messages: {e}")
 
-        error_msg = f"Error streaming messages: {e}"
+        error_msg, error_detail = friendly_model_error(e)
         error_type = "unexpected_error"
 
         full_msg = AIMessage(content="".join(accumulated_content)) if accumulated_content else None
@@ -1299,6 +1304,7 @@ async def stream_agent_chat(
                 full_msg=full_msg,
                 error_message=error_msg,
                 error_type=error_type,
+                error_detail=error_detail,
                 trace_info=trace_info,
                 run_id=meta.get("run_id"),
                 request_id=meta.get("request_id"),
@@ -1524,14 +1530,16 @@ async def stream_agent_resume(
 
     except Exception as e:
         logger.exception(f"Error during resume: {e}")
+        error_msg, error_detail = friendly_model_error(e)
 
         async with pg_manager.get_async_session_context() as new_db:
             new_conv_repo = ConversationRepository(new_db)
             await save_partial_message(
                 new_conv_repo,
                 thread_id,
-                error_message=f"Error during resume: {e}",
+                error_message=error_msg,
                 error_type="resume_error",
+                error_detail=error_detail,
                 trace_info=trace_info,
                 run_id=meta.get("run_id"),
                 request_id=meta.get("request_id"),
@@ -1539,7 +1547,7 @@ async def stream_agent_resume(
             )
 
         await _persist_model_request_timing(model_request_recorder, meta)
-        yield make_resume_chunk(message=f"Error during resume: {e}", status="error")
+        yield make_resume_chunk(message=error_msg, status="error")
     finally:
         await asyncio.to_thread(flush_langfuse)
 
