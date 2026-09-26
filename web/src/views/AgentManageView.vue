@@ -38,8 +38,6 @@ function switchTab(tab) {
       <template #info>
         <div class="summary-strip">
           <span>{{ activeStats.total || 0 }} 个智能体</span>
-          <span>{{ activeStats.global || 0 }} 个全局</span>
-          <span v-if="activeStats.builtin">{{ activeStats.builtin }} 个内置</span>
           <span>{{ activeStats.manageable || 0 }} 个可管理</span>
         </div>
       </template>

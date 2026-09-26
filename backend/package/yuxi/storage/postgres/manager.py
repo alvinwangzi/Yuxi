@@ -391,7 +391,7 @@ class PostgresManager(metaclass=SingletonMeta):
             )
 
             self._initialized = True
-            logger.info(f"PostgreSQL manager initialized for knowledge base: {db_url.split('@')[0]}://***")
+            logger.info("PostgreSQL manager initialized for knowledge base")
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL manager: {e}")
             # 不抛出异常，允许应用启动，但在使用时会报错
@@ -1129,6 +1129,7 @@ class PostgresManager(metaclass=SingletonMeta):
                 is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
                 is_builtin BOOLEAN NOT NULL DEFAULT FALSE,
                 deleted_at TIMESTAMP WITHOUT TIME ZONE,
+                include_user_uid BOOLEAN NOT NULL DEFAULT FALSE,
                 created_by VARCHAR(100),
                 updated_by VARCHAR(100),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -1150,6 +1151,10 @@ class PostgresManager(metaclass=SingletonMeta):
             )
             """,
             *WORKDIR_PATH_SCHEMA_STATEMENTS,
+            (
+                "ALTER TABLE IF EXISTS model_providers ADD COLUMN IF NOT EXISTS "
+                "include_user_uid BOOLEAN NOT NULL DEFAULT FALSE"
+            ),
             "ALTER TABLE IF EXISTS agent_runs ADD COLUMN IF NOT EXISTS agent_slug VARCHAR(64)",
             "ALTER TABLE IF EXISTS agent_runs ADD COLUMN IF NOT EXISTS conversation_thread_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS agent_runs ADD COLUMN IF NOT EXISTS created_by_run_id VARCHAR(64)",

@@ -32,7 +32,7 @@ from yuxi.agents.context import (
     DEFAULT_SUMMARY_TOOL_RESULT_TOKEN_LIMIT,
     DEFAULT_YUXI_SUMMARY_PROMPT,
 )
-from yuxi.models.chat import async_load_chat_model, load_chat_model, resolve_chat_model_spec
+from yuxi.models.chat import load_chat_model, resolve_chat_model_spec
 from yuxi.utils.logging_config import logger
 
 _APPROX_CHARS_PER_TOKEN = 4
@@ -489,7 +489,7 @@ async def create_summary_middleware_from_context(context, *, backend) -> YuxiSum
     trigger_tokens = getattr(context, "summary_threshold", DEFAULT_SUMMARY_THRESHOLD_K) * 1024
     model_spec = resolve_chat_model_spec(context.model)
     return create_summary_middleware(
-        model=await async_load_chat_model(fully_specified_name=model_spec, session_id=context.thread_id),
+        model=load_chat_model(fully_specified_name=model_spec, session_id=context.thread_id, uid=context.uid),
         backend=backend,
         trigger=("tokens", trigger_tokens),
         keep=("messages", getattr(context, "summary_keep_messages", DEFAULT_SUMMARY_KEEP_MESSAGES)),

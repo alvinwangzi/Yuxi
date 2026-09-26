@@ -179,6 +179,22 @@ const onCategoryChange = (catKey) => {
   loadAgents()
 }
 
+const refreshAgents = async () => {
+  try {
+    await loadAgents()
+  } catch (error) {
+    message.error(error.message || '加载智能体失败')
+  }
+}
+
+const handleAgentSaved = async () => {
+  try {
+    await refreshAgentLists()
+  } catch (error) {
+    message.error(error.message || '刷新智能体列表失败')
+  }
+}
+
 const openCreateAgentModal = () => {
   agentEditModalRef.value?.openCreate()
 }
@@ -273,7 +289,7 @@ onBeforeUnmount(() => {
 defineExpose({
   loading: agentLoading,
   stats: agentStats,
-  refresh: loadAgents
+  refresh: refreshAgents
 })
 </script>
 
@@ -283,7 +299,7 @@ defineExpose({
       <template #actions>
         <a-button
           class="lucide-icon-btn"
-          @click="loadAgents"
+          @click="refreshAgents"
           :disabled="agentLoading"
           aria-label="刷新智能体"
         >
@@ -411,7 +427,7 @@ defineExpose({
     <AgentEditModal
       ref="agentEditModalRef"
       :backend-options="agentBackendOptions"
-      @saved="refreshAgentLists"
+      @saved="handleAgentSaved"
     />
   </div>
 </template>

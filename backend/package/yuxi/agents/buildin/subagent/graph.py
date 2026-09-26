@@ -22,12 +22,13 @@ from yuxi.agents.middlewares import (
     ImageInputCompatibilityMiddleware,
     NetworkRetryMiddleware,
     TokenUsageMiddleware,
+    ToolErrorGuardMiddleware,
     create_summary_middleware_from_context,
 )
 from yuxi.agents.middlewares.skills import SkillsMiddleware
 from yuxi.agents.tool_approval import SENSITIVE_BACKEND_TOOLS, normalize_tool_approval_mode
 from yuxi.agents.toolkits.service import resolve_configured_runtime_tools
-from yuxi.models.chat import async_load_chat_model, load_chat_model, resolve_chat_model_spec
+from yuxi.models.chat import load_chat_model, resolve_chat_model_spec
 
 _SUBAGENT_DISABLED_TOOLS = frozenset({"present_artifacts", "ask_user_question", "install_skill"})
 # 默认审批模式额外隐藏敏感 backend 工具，避免子智能体绕过主线程逐项审批。
@@ -91,6 +92,8 @@ async def _build_middlewares(context, backend, tool_approval_mode: str):
     # tool_approval_mode is normalized once by the caller (get_graph / SubAgentBackend.get_graph).
 
     return [
+        # 子 Agent 的工具异常也在最外层隔离，避免打断父对话。
+        ToolErrorGuardMiddleware(),
         create_agent_filesystem_middleware(
             getattr(context, "tool_token_limit", DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS) * 1024,
             backend=backend,
@@ -147,7 +150,11 @@ class SubAgentBackend(BaseAgent):
         backend = create_agent_composite_backend(context)
 
         return create_agent(
-            model=await async_load_chat_model(fully_specified_name=model_spec, session_id=context.thread_id),
+            model=load_chat_model(
+                fully_specified_name=model_spec,
+                session_id=context.thread_id,
+                uid=context.uid,
+            ),
             tools=_filter_disabled_tools(await resolve_configured_runtime_tools(context), disabled_tools),
             system_prompt=build_prompt_with_context(context),
             middleware=await _build_middlewares(context, backend, tool_approval_mode),
