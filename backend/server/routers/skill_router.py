@@ -44,6 +44,7 @@ from yuxi.permissions import resolve_skill_permission
 from yuxi.agents.skills.remote_install import list_remote_skills, search_remote_skills
 from yuxi.agents.skills.repository import SkillRepository
 from yuxi.repositories.category_repository import CategoryRepository
+from yuxi.repositories.user_repository import UserRepository
 from yuxi.storage.postgres.models_business import User
 from yuxi.utils.logging_config import logger
 
@@ -93,7 +94,7 @@ class SkillBatchDeleteRequest(BaseModel):
 
 
 class SkillCategoryUpdateRequest(BaseModel):
-    category_id: int = Field(..., description="目标分类 ID")
+    category_id: int | None = Field(None, description="目标分类 ID，null 表示取消分类")
 
 
 class _DraftConfirmRequestBase(BaseModel):
@@ -129,12 +130,25 @@ def _summarize_results(results: list[dict]) -> dict[str, int]:
     }
 
 
-def _serialize_skill_for_user(item, user: User) -> dict:
+def _serialize_skill_for_user(item, user: User, author_nickname_map: dict[str, str] | None = None) -> dict:
     data = item.to_dict()
     data["can_manage"] = user_can_manage_skill(user, item)
     data["effective_permission"] = resolve_skill_permission(user, item).value
     data["is_builtin"] = is_builtin_skill(item)
+    # 添加作者昵称
+    if author_nickname_map and item.author_uid:
+        data["author_nickname"] = author_nickname_map.get(item.author_uid)
     return data
+
+
+async def _build_author_nickname_map(db: AsyncSession, items: list) -> dict[str, str]:
+    """批量获取技能列表中的作者昵称映射。"""
+    author_uids = {item.author_uid for item in items if getattr(item, "author_uid", None)}
+    if not author_uids:
+        return {}
+    user_repo = UserRepository(db)
+    users = await user_repo.list_by_uids(list(author_uids))
+    return {u.uid: (u.nickname or u.username) for u in users}
 
 
 @user_skills.get("")
@@ -144,9 +158,10 @@ async def list_skill_cards_route(
 ):
     try:
         items = await list_skill_cards_for_user(db, current_user)
+        author_nickname_map = await _build_author_nickname_map(db, items)
         return {
             "success": True,
-            "data": [_serialize_skill_for_user(item, current_user) for item in items],
+            "data": [_serialize_skill_for_user(item, current_user, author_nickname_map) for item in items],
             "allowed_access_levels": get_allowed_skill_access_levels(current_user),
         }
     except HTTPException:
@@ -163,7 +178,8 @@ async def list_accessible_skills_route(
 ):
     try:
         items = await list_accessible_skills(db, current_user)
-        return {"success": True, "data": [_serialize_skill_for_user(item, current_user) for item in items]}
+        author_nickname_map = await _build_author_nickname_map(db, items)
+        return {"success": True, "data": [_serialize_skill_for_user(item, current_user, author_nickname_map) for item in items]}
     except HTTPException:
         raise
     except Exception as e:
@@ -356,9 +372,10 @@ async def list_skills_route(
 ):
     try:
         items = await list_visible_skills_for_management(db, current_user)
+        author_nickname_map = await _build_author_nickname_map(db, items)
         return {
             "success": True,
-            "data": [_serialize_skill_for_user(item, current_user) for item in items],
+            "data": [_serialize_skill_for_user(item, current_user, author_nickname_map) for item in items],
             "allowed_access_levels": get_allowed_skill_access_levels(current_user),
         }
     except HTTPException:
@@ -430,12 +447,16 @@ async def update_skill_category_route(
 ):
     """更新技能所属分类（仅管理员）。"""
     cat_repo = CategoryRepository(db)
-    category = await cat_repo.get_by_id(payload.category_id)
-    if not category:
-        raise HTTPException(status_code=404, detail="分类不存在")
+    if payload.category_id is not None:
+        category = await cat_repo.get_by_id(payload.category_id)
+        if not category:
+            raise HTTPException(status_code=404, detail="分类不存在")
 
     repo = SkillRepository(db)
+    # 先查找 shared 技能，再查找 personal 技能
     item = await repo.get_by_slug(slug, source_scope="shared")
+    if not item:
+        item = await repo.get_by_slug(slug, source_scope="personal")
     if not item:
         raise HTTPException(status_code=404, detail="技能不存在")
 

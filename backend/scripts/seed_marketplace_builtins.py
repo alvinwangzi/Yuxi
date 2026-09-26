@@ -71,7 +71,7 @@ async def seed_builtin_market_entries():
                 text("""
                     INSERT INTO skill_market_versions
                     (entry_id, version, release_notes, content_snapshot, change_type, submitted_by, is_latest)
-                    VALUES (:entry_id, :version, '初始版本', :snapshot::jsonb, 'minor', 'system', TRUE)
+                    VALUES (:entry_id, :version, '初始版本', CAST(:snapshot AS jsonb), 'minor', 'system', TRUE)
                 """),
                 {
                     "entry_id": entry_id,

@@ -13,7 +13,6 @@ import {
   PanelLeftOpen,
   MessageCirclePlus,
   Search,
-  Store,
   Workflow
 } from '@lucide/vue'
 
@@ -178,14 +177,6 @@ const mainList = computed(() => {
     activePaths: ['/skills'],
     icon: Puzzle,
     activeIcon: Puzzle
-  })
-
-  items.push({
-    name: '技能市场',
-    path: '/marketplace',
-    activePaths: ['/marketplace'],
-    icon: Store,
-    activeIcon: Store
   })
 
   items.push({

@@ -7,7 +7,7 @@ from yuxi.marketplace.service import MarketplaceService
 from yuxi.marketplace.repository import MarketplaceRepository
 from yuxi.storage.postgres.models_business import User
 
-router = APIRouter(prefix="/api/marketplace", tags=["marketplace"])
+router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 
 
 async def get_marketplace_service(

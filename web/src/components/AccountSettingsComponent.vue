@@ -65,6 +65,29 @@
               </button>
             </div>
             <div class="profile-row editable-row">
+              <span class="profile-label">昵称</span>
+              <a-input
+                v-if="editingField === 'nickname'"
+                ref="nicknameInput"
+                v-model:value="profileDraft.nickname"
+                class="inline-input"
+                size="small"
+                :max-length="50"
+                :disabled="savingField === 'nickname'"
+                @press-enter="saveField('nickname')"
+                @keydown.esc.stop.prevent="cancelField"
+                @blur="cancelField"
+              />
+              <button
+                v-else
+                type="button"
+                class="editable-value"
+                @click="startFieldEdit('nickname')"
+              >
+                {{ userStore.nickname || '未设置' }}
+              </button>
+            </div>
+            <div class="profile-row editable-row">
               <span class="profile-label">手机号</span>
               <a-input
                 v-if="editingField === 'phone_number'"
@@ -190,6 +213,7 @@ const passwordForm = reactive({
 })
 const profileDraft = reactive({
   username: '',
+  nickname: '',
   phone_number: ''
 })
 
@@ -210,6 +234,7 @@ const userRoleText = computed(() => {
 
 const syncProfileDraft = () => {
   profileDraft.username = userStore.username || ''
+  profileDraft.nickname = userStore.nickname || ''
   profileDraft.phone_number = userStore.phoneNumber || ''
 }
 
@@ -254,6 +279,15 @@ const saveField = async (field) => {
       return
     }
     payload.username = username
+  }
+
+  if (field === 'nickname') {
+    const nickname = profileDraft.nickname.trim()
+    if (nickname === (userStore.nickname || '')) {
+      cancelField()
+      return
+    }
+    payload.nickname = nickname
   }
 
   if (field === 'phone_number') {

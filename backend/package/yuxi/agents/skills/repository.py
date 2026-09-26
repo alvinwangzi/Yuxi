@@ -71,6 +71,9 @@ class SkillRepository:
         created_by: str | None,
         source_scope: str = "shared",
         owner_uid: str | None = None,
+        author_uid: str | None = None,
+        market_entry_id: int | None = None,
+        market_version_id: int | None = None,
     ) -> Skill:
         now = utc_now_naive()
         item = Skill(
@@ -90,6 +93,9 @@ class SkillRepository:
             enabled=enabled,
             created_by=created_by,
             updated_by=created_by,
+            author_uid=author_uid,
+            market_entry_id=market_entry_id,
+            market_version_id=market_version_id,
             created_at=now,
             updated_at=now,
         )

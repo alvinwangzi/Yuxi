@@ -16,7 +16,7 @@
           />
           <!-- <div class="user-role-badge" :class="userRoleClass"></div> -->
         </div>
-        <div v-if="showRole" class="user-name">{{ userStore.username }}</div>
+        <div v-if="showRole" class="user-name">{{ userStore.nickname || userStore.username }}</div>
         <div v-if="slots.actions" class="user-info-actions">
           <slot name="actions" />
         </div>
@@ -25,7 +25,7 @@
         <a-menu>
           <a-menu-item key="user-info" @click="openProfile">
             <div class="user-info-display">
-              <div class="user-menu-username">{{ userStore.username }}</div>
+              <div class="user-menu-username">{{ userStore.nickname || userStore.username }}</div>
               <div class="user-menu-details">
                 <span class="user-menu-info">ID: {{ userStore.uid }}</span>
                 <span class="user-menu-role">{{ userRoleText }}</span>

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yuxi.agents.mcp.service import get_enabled_mcp_server_slugs
 from yuxi.agents.skills.buildin import BUILTIN_SKILLS_DIR
 from yuxi.agents.skills.repository import SkillRepository
+from yuxi.marketplace.scanner import scan_skill_directory
 from yuxi.config import (
     get_runtime_dir,
     get_skill_data_dir,
@@ -104,6 +105,9 @@ class ResolvedSkill:
     overrides_shared: bool = False
     shadowed_by_personal: bool = False
     category_id: int | None = None
+    author_uid: str | None = None
+    market_entry_id: int | None = None
+    market_version_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """返回可安全提供给前端的 Skill 元数据。"""
@@ -122,9 +126,14 @@ class ResolvedSkill:
             "overrides_shared": self.overrides_shared,
             "shadowed_by_personal": self.shadowed_by_personal,
             "category_id": self.category_id,
+            "author_uid": self.author_uid,
+            "market_entry_id": self.market_entry_id,
+            "market_version_id": self.market_version_id,
         }
         if self.share_config is not None:
             data["share_config"] = self.share_config
+        if self.version is not None:
+            data["version"] = self.version
         return data
 
 
@@ -898,6 +907,8 @@ def parse_skill_dir_metadata(source_skill_dir: Path) -> dict[str, Any]:
         "tool_dependencies": normalize_string_list(meta.get("tool_dependencies")),
         "mcp_dependencies": normalize_string_list(meta.get("mcp_dependencies")),
         "skill_dependencies": normalize_string_list(meta.get("skill_dependencies")),
+        "version": meta.get("version"),
+        "author_uid": meta.get("author"),
     }
 
 
@@ -1052,6 +1063,9 @@ def _resolved_shared_skill(item: Skill, *, shadowed_by_personal: bool = False) -
         content_hash=item.content_hash,
         shadowed_by_personal=shadowed_by_personal,
         category_id=item.category_id,
+        author_uid=item.author_uid,
+        market_entry_id=item.market_entry_id,
+        market_version_id=item.market_version_id,
     )
 
 
@@ -1075,6 +1089,8 @@ def _resolved_personal_skill(uid: str, root: Path, metadata: dict[str, Any]) -> 
         tool_dependencies=[],
         mcp_dependencies=[],
         skill_dependencies=[],
+        version=metadata.get("version"),
+        author_uid=metadata.get("author_uid"),
     )
 
 
@@ -1096,6 +1112,10 @@ def _personal_skill_from_db(row: Skill, uid: str) -> ResolvedSkill:
         mcp_dependencies=normalize_string_list(row.mcp_dependencies),
         skill_dependencies=normalize_string_list(row.skill_dependencies),
         category_id=row.category_id,
+        version=row.version,
+        author_uid=row.author_uid,
+        market_entry_id=row.market_entry_id,
+        market_version_id=row.market_version_id,
     )
 
 
@@ -1111,6 +1131,10 @@ async def _upsert_personal_skill_to_db(
         existing.tool_dependencies = item.tool_dependencies or []
         existing.mcp_dependencies = item.mcp_dependencies or []
         existing.skill_dependencies = item.skill_dependencies or []
+        if item.version is not None:
+            existing.version = item.version
+        if item.author_uid is not None:
+            existing.author_uid = item.author_uid
         existing.updated_by = uid
         existing.updated_at = utc_now_naive()
         await db.flush()
@@ -1133,6 +1157,10 @@ async def _upsert_personal_skill_to_db(
             created_by=uid,
             source_scope="personal",
             owner_uid=uid,
+            version=item.version,
+            author_uid=item.author_uid,
+            market_entry_id=item.market_entry_id,
+            market_version_id=item.market_version_id,
         )
         await db.flush()
 
@@ -1165,6 +1193,10 @@ async def _sync_personal_skills_to_db(
                     created_by=uid,
                     source_scope="personal",
                     owner_uid=uid,
+                    version=item.version,
+                    author_uid=item.author_uid,
+                    market_entry_id=item.market_entry_id,
+                    market_version_id=item.market_version_id,
                 )
             except Exception as exc:
                 logger.warning(f"回填个人 Skill 到 DB 失败: uid={uid}, slug={item.slug}, error={exc}")
@@ -1472,6 +1504,18 @@ async def confirm_skill_install_draft(
             results.append(result)
             continue
 
+        # 安全扫描
+        scan_result = scan_skill_directory(source_dir)
+        if scan_result.score >= 76:
+            result = {
+                "slug": slug,
+                "success": False,
+                "error": f"安全风险评分过高 ({scan_result.score}/100)，禁止安装。{scan_result.recommendation}",
+                "scan_result": scan_result.to_dict(),
+            }
+            results.append(result)
+            continue
+
         temp_target = skills_root / f".{slug}.tmp-{uuid.uuid4().hex[:8]}"
         final_dir = skills_root / slug
         published = False
@@ -1495,7 +1539,12 @@ async def confirm_skill_install_draft(
                 created_by=operator.uid,
             )
             await db.commit()
-            results.append({"slug": item.slug, "success": True, "skill": item.to_dict()})
+            results.append({
+                "slug": item.slug,
+                "success": True,
+                "skill": item.to_dict(),
+                "scan_result": scan_result.to_dict(),
+            })
         except Exception as e:
             await db.rollback()
             if published:
@@ -1548,6 +1597,17 @@ async def confirm_personal_skill_install_draft(
         source_dir = (draft_dir / str(draft_item.get("source_dir", ""))).resolve()
         try:
             source_dir.relative_to(draft_dir.resolve())
+            # 安全扫描
+            scan_result = scan_skill_directory(source_dir)
+            if scan_result.score >= 76:
+                results.append({
+                    "slug": personal_slug,
+                    "requested_slug": requested_slug,
+                    "success": False,
+                    "error": f"安全风险评分过高 ({scan_result.score}/100)，禁止安装。{scan_result.recommendation}",
+                    "scan_result": scan_result.to_dict(),
+                })
+                continue
             item = await install_personal_skill_dir(
                 str(operator.uid),
                 source_dir,
@@ -1560,6 +1620,7 @@ async def confirm_personal_skill_install_draft(
                     "requested_slug": requested_slug,
                     "success": True,
                     "skill": item.to_dict(),
+                    "scan_result": scan_result.to_dict(),
                 }
             )
         except Exception as exc:
@@ -1860,7 +1921,7 @@ def list_builtin_skill_specs() -> list[dict[str, Any]]:
                 "skill_dependencies": normalize_string_list(meta.get("skill_dependencies")),
                 "content_hash": _compute_dir_hash(source_dir),
                 "source_dir": source_dir,
-                "auto_install": bool(getattr(raw_spec, "auto_install", True)),
+                "auto_install": bool(meta.get("auto_install", True)),
             }
         )
 

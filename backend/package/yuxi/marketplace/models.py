@@ -6,8 +6,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from yuxi.storage.postgres.models_business import Base
 from yuxi.utils.datetime_utils import format_utc_datetime, utc_now_naive
-
-
 class SkillMarketEntry(Base):
     """技能市场条目"""
 
@@ -99,12 +97,16 @@ class SkillMarketSubmission(Base):
     submission_note = Column(Text, nullable=True, comment="提交说明")
     status = Column(
         String(16), nullable=False, default="pending",
-        comment="状态: pending | approved | rejected"
+        comment="状态：pending | approved | rejected"
     )
     reviewer_uid = Column(String(64), nullable=True, comment="审批者")
     review_note = Column(Text, nullable=True, comment="审批说明")
     submitted_at = Column(DateTime, default=utc_now_naive)
     reviewed_at = Column(DateTime, nullable=True)
+    # 安全扫描字段
+    scan_score = Column(Integer, nullable=True, comment="风险评分 0-100")
+    scan_findings = Column(JSONB, nullable=True, comment="扫描发现详情")
+    scanned_at = Column(DateTime, nullable=True, comment="扫描时间")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +120,9 @@ class SkillMarketSubmission(Base):
             "review_note": self.review_note,
             "submitted_at": format_utc_datetime(self.submitted_at),
             "reviewed_at": format_utc_datetime(self.reviewed_at),
+            "scan_score": self.scan_score,
+            "scan_findings": self.scan_findings,
+            "scanned_at": format_utc_datetime(self.scanned_at),
         }
 
 

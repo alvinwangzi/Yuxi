@@ -1,14 +1,25 @@
 """技能市场业务逻辑"""
 import json
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
 from pathlib import Path
 from yuxi.marketplace.repository import MarketplaceRepository
 from yuxi.marketplace.models import (
     SkillMarketEntry, SkillMarketVersion, SkillMarketSubmission, SkillInstallation
 )
+from yuxi.marketplace.scanner import scan_skill_content
 from yuxi.storage.postgres.models_business import Skill
+from yuxi.repositories.user_repository import UserRepository
+from yuxi.utils.datetime_utils import utc_now_naive
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def _build_author_nickname_map(session: AsyncSession, author_uids: list[str]) -> dict[str, str]:
+    """批量获取作者昵称映射。"""
+    if not author_uids:
+        return {}
+    user_repo = UserRepository(session)
+    users = await user_repo.list_by_uids(author_uids)
+    return {u.uid: (u.nickname or u.username) for u in users}
 
 
 class MarketplaceService:
@@ -39,8 +50,17 @@ class MarketplaceService:
             source_type=source_type,
             category_id=category_id,
         )
+        # 批量获取作者昵称
+        author_uids = [e.author_uid for e in entries if e.author_uid]
+        author_nickname_map = await _build_author_nickname_map(self.session, author_uids)
+        items = []
+        for e in entries:
+            item = e.to_dict()
+            if e.author_uid and e.author_uid in author_nickname_map:
+                item["author_nickname"] = author_nickname_map[e.author_uid]
+            items.append(item)
         return {
-            "items": [e.to_dict() for e in entries],
+            "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -55,11 +75,17 @@ class MarketplaceService:
         versions = await self.repo.list_versions(entry.id)
         latest = await self.repo.get_latest_version(entry.id)
         
-        return {
+        result = {
             **entry.to_dict(),
             "versions": [v.to_dict() for v in versions],
             "latest_version": latest.to_dict() if latest else None,
         }
+        # 添加作者昵称
+        if entry.author_uid:
+            author_nickname_map = await _build_author_nickname_map(self.session, [entry.author_uid])
+            if entry.author_uid in author_nickname_map:
+                result["author_nickname"] = author_nickname_map[entry.author_uid]
+        return result
 
     async def install_skill(
         self, user_uid: str, slug: str
@@ -252,12 +278,13 @@ class MarketplaceService:
             original_skill_id=original_skill.id,
         )
         entry = await self.repo.create_entry(entry)
-        
-        # 创建首个版本
+
+        # 创建首个版本（商城无已有版本，初始为 1.0.0）
         snapshot = await self._build_content_snapshot(original_skill)
+        initial_version = "1.0.0"
         version = SkillMarketVersion(
             entry_id=entry.id,
-            version="1.0.0",
+            version=initial_version,
             release_notes=submission_note,
             content_snapshot=snapshot,
             change_type=change_type,
@@ -265,7 +292,13 @@ class MarketplaceService:
             is_latest=True,
         )
         version = await self.repo.create_version(version)
-        
+
+        # 执行安全扫描
+        scan_result = scan_skill_content(
+            skill_md=snapshot.get("skill_md", ""),
+            scripts=snapshot.get("scripts"),
+        )
+
         # 创建提交记录
         submission = SkillMarketSubmission(
             entry_id=entry.id,
@@ -273,13 +306,17 @@ class MarketplaceService:
             submitter_uid=submitter_uid,
             submission_note=submission_note,
             status="pending",
+            scan_score=scan_result.score,
+            scan_findings=scan_result.to_dict()["findings"],
+            scanned_at=utc_now_naive(),
         )
         submission = await self.repo.create_submission(submission)
-        
+
         return {
             "entry": entry.to_dict(),
             "version": version.to_dict(),
             "submission": submission.to_dict(),
+            "scan_result": scan_result.to_dict(),
         }
 
     async def _submit_new_version(
@@ -293,14 +330,14 @@ class MarketplaceService:
         """提交新版本"""
         if entry.status == "unpublished":
             raise ValueError("技能已下架，无法提交新版本")
-        
+
         # 获取当前最新版本
         latest = await self.repo.get_latest_version(entry.id)
         current_version = latest.version if latest else "1.0.0"
-        
+
         # 计算新版本
         new_version = self._calculate_next_version(current_version, change_type)
-        
+
         # 创建新版本
         snapshot = await self._build_content_snapshot(original_skill)
         version = SkillMarketVersion(
@@ -313,7 +350,13 @@ class MarketplaceService:
             is_latest=False,  # 审批通过后才设为最新
         )
         version = await self.repo.create_version(version)
-        
+
+        # 执行安全扫描
+        scan_result = scan_skill_content(
+            skill_md=snapshot.get("skill_md", ""),
+            scripts=snapshot.get("scripts"),
+        )
+
         # 创建提交记录
         submission = SkillMarketSubmission(
             entry_id=entry.id,
@@ -321,13 +364,17 @@ class MarketplaceService:
             submitter_uid=submitter_uid,
             submission_note=submission_note,
             status="pending",
+            scan_score=scan_result.score,
+            scan_findings=scan_result.to_dict()["findings"],
+            scanned_at=utc_now_naive(),
         )
         submission = await self.repo.create_submission(submission)
-        
+
         return {
             "entry": entry.to_dict(),
             "version": version.to_dict(),
             "submission": submission.to_dict(),
+            "scan_result": scan_result.to_dict(),
         }
 
     async def approve_submission(
@@ -336,33 +383,40 @@ class MarketplaceService:
         """审批通过"""
         submission = await self.repo.get_submission_by_id(submission_id)
         if not submission:
-            raise ValueError(f"提交不存在: {submission_id}")
-        
+            raise ValueError(f"提交不存在：{submission_id}")
+    
         if submission.status != "pending":
-            raise ValueError(f"提交已处理: {submission_id}")
-        
+            raise ValueError(f"提交已处理：{submission_id}")
+    
+        # 检查安全风险评分，高风险禁止通过
+        if submission.scan_score is not None and submission.scan_score >= 76:
+            raise ValueError(
+                f"安全风险评分过高 ({submission.scan_score}/100)，禁止审批通过。"
+                f"请先处理高风险问题后再提交审批。"
+            )
+    
         # 更新提交状态
         submission.status = "approved"
         submission.reviewer_uid = reviewer_uid
         submission.review_note = review_note
-        submission.reviewed_at = datetime.now(timezone.utc)
+        submission.reviewed_at = utc_now_naive()
         await self.repo.update_submission(submission)
-        
+    
         # 更新条目状态
         entry = await self.repo.get_entry_by_id(submission.entry_id)
         if entry.status == "pending":
             entry.status = "approved"
             await self.repo.update_entry(entry)
-        
+    
         # 设置版本为最新
         await self.repo.set_latest_version(entry.id, submission.version_id)
-        
+    
         # 更新版本的审批信息
         version = await self.repo.get_version_by_id(submission.version_id)
         version.approved_by = reviewer_uid
-        version.approved_at = datetime.now(timezone.utc)
+        version.approved_at = utc_now_naive()
         await self.repo.update_version(version)
-        
+    
         return {
             "submission": submission.to_dict(),
             "entry": entry.to_dict(),
@@ -383,7 +437,7 @@ class MarketplaceService:
         submission.status = "rejected"
         submission.reviewer_uid = reviewer_uid
         submission.review_note = review_note
-        submission.reviewed_at = datetime.now(timezone.utc)
+        submission.reviewed_at = utc_now_naive()
         await self.repo.update_submission(submission)
         
         return {"submission": submission.to_dict()}
@@ -425,6 +479,20 @@ class MarketplaceService:
             "mcp_dependencies": skill.mcp_dependencies or [],
             "skill_dependencies": skill.skill_dependencies or [],
             "files": {},  # 存储技能文件内容（简化处理）
+            "skill_md": "",  # SKILL.md 内容，用于安全扫描
+            "scripts": {},  # 脚本内容，用于安全扫描
         }
-        
+
+        # 读取 SKILL.md 和脚本内容用于安全扫描
+        if skill.dir_path:
+            skill_dir = Path(skill.dir_path)
+            skill_md_path = skill_dir / "SKILL.md"
+            if skill_md_path.exists():
+                snapshot["skill_md"] = skill_md_path.read_text(encoding="utf-8")
+
+            scripts_dir = skill_dir / "scripts"
+            if scripts_dir.is_dir():
+                for py_file in scripts_dir.glob("*.py"):
+                    snapshot["scripts"][py_file.name] = py_file.read_text(encoding="utf-8")
+
         return snapshot

@@ -85,6 +85,7 @@ class UserCreate(BaseModel):
     role: str = "user"
     phone_number: str | None = None
     department_id: int | None = None
+    nickname: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -95,11 +96,13 @@ class UserUpdate(BaseModel):
     phone_number: str | None = None
     avatar: str | None = None
     department_id: int | None = None
+    nickname: str | None = None
 
 
 class UserProfileUpdate(BaseModel):
     username: str | None = None
     phone_number: str | None = None
+    nickname: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -113,6 +116,7 @@ class UserResponse(BaseModel):
     id: int
     username: str
     uid: str
+    nickname: str | None = None
     phone_number: str | None = None
     avatar: str | None = None
     role: str
@@ -569,6 +573,11 @@ async def update_profile(
         current_user.phone_number = profile_data.phone_number
         update_details.append(f"手机号: {profile_data.phone_number or '已清空'}")
 
+    # 更新昵称
+    if profile_data.nickname is not None:
+        current_user.nickname = profile_data.nickname
+        update_details.append(f"昵称: {profile_data.nickname or '已清空'}")
+
     await user_repository.save(current_user)
 
     # 记录操作
@@ -693,6 +702,7 @@ async def create_user(
             "password_hash": hashed_password,
             "role": user_data.role,
             "department_id": department_id,
+            "nickname": user_data.nickname,
         }
     )
 
@@ -867,6 +877,10 @@ async def update_user(
     if user_data.avatar is not None:
         user.avatar = user_data.avatar
         update_details.append(f"头像: {user_data.avatar or '已清空'}")
+
+    if user_data.nickname is not None:
+        user.nickname = user_data.nickname
+        update_details.append(f"昵称: {user_data.nickname or '已清空'}")
 
     # 部门修改权限控制（只有超级管理员可以修改用户部门）
     if user_data.department_id is not None and user_data.department_id != user.department_id:

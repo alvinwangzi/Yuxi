@@ -105,18 +105,11 @@
             :key="`${group.key}:${skill.slug || skill.id}`"
             class="card-wrapper"
             :class="{
-              selected: !skill.isSuite && selectedCardSlugs.includes(skill.slug),
-              'batch-mode': isBatchDeleteMode && !skill.isSuite
+              selected: selectedCardSlugs.includes(skill.slug),
+              'batch-mode': isBatchDeleteMode
             }"
           >
-            <SkillSuiteCard
-              v-if="skill.isSuite"
-              :suite="skill"
-              :installed-slugs="[...installedPersonalSkillKeys]"
-              @open="openRecommendedSuite"
-            />
-            <template v-else>
-              <a-checkbox
+            <a-checkbox
                 v-if="
                   isBatchDeleteMode &&
                   canManageSkill(skill) &&
@@ -136,12 +129,21 @@
                 @click="handleCardClick(skill)"
                 :class="{ 'card-clickable-select': isBatchDeleteMode }"
               >
+                <template v-if="skill.version" #badge>
+                  <span class="version-badge">v{{ skill.version }}</span>
+                </template>
                 <template #tags>
+                  <component
+                    :is="getSourceIcon(skill)"
+                    v-if="getSourceIcon(skill)"
+                    :size="13"
+                    class="source-icon"
+                    :style="{ color: getSourceIconColor(skill) }"
+                  />
                   <span
-                    v-if="skill.sourceScope !== 'personal'"
                     class="card-tag tag-gray category-tag"
                     :class="{ clickable: canManageSkill(skill) }"
-                    @click.stop="openRecategorize(skill, $event)"
+                    @click.stop="canManageSkill(skill) && openRecategorize(skill, $event)"
                   >
                     {{ getSkillCategoryName(skill) }}
                   </span>
@@ -173,7 +175,6 @@
                   </button>
                 </template>
               </InfoCard>
-            </template>
           </div>
         </ExtensionCardGrid>
       </template>
@@ -247,6 +248,12 @@
             </a-button>
           </div>
           <div class="skill-preview-footer-right">
+            <a-button
+              v-if="previewSkill?.sourceScope === 'personal'"
+              @click="openSubmitToMarket"
+            >
+              提交到市场
+            </a-button>
             <a-button @click="closeSkillPreview">关闭</a-button>
             <a-button
               v-if="previewSkill.sourceScope !== 'personal'"
@@ -532,9 +539,28 @@
       </template>
     </SkillInstallFlowModal>
 
+    <!-- 提交到技能市场 -->
+    <SubmitToMarketModal
+      v-if="submitModalVisible"
+      :skill-id="submitSkillId"
+      :skill-name="submitSkillName"
+      :skill-description="submitSkillDescription"
+      :skill-category-id="submitSkillCategoryId"
+      :is-update="submitIsUpdate"
+      @success="handleSubmitSuccess"
+      @cancel="submitModalVisible = false"
+    />
+
     <Teleport to="body">
       <div v-if="recategorizeState.visible" class="recategorize-popup" :style="recategorizePopupStyle">
         <div class="popup-title">选择分类</div>
+        <div
+          class="popup-item"
+          :class="{ active: !recategorizeState.currentSkill?.resolvedCategoryId }"
+          @click="selectRecategorizeCategory(null)"
+        >
+          未分类
+        </div>
         <div
           v-for="cat in apiCategories"
           :key="cat.id"
@@ -563,13 +589,17 @@ import {
   Check,
   Plus,
   Minus,
-  Loader2
+  Loader2,
+  User,
+  Store,
+  CloudDownload,
+  Monitor
 } from '@lucide/vue'
 import { skillApi } from '@/apis/skill_api'
 import ExtensionCardGrid from './ExtensionCardGrid.vue'
 import SkillInstallFlowModal from './SkillInstallFlowModal.vue'
-import SkillSuiteCard from './SkillSuiteCard.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
+import SubmitToMarketModal from '@/components/marketplace/SubmitToMarketModal.vue'
 import PageShoulder from '@/components/shared/PageShoulder.vue'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { formatExtensionCardTitle } from '@/utils/extensionDisplayName'
@@ -577,68 +607,6 @@ import { getShareConfigLabel } from '@/utils/shareConfig'
 import { getSkillIcon } from '@/utils/skill_icon_utils'
 import { inferSkillCategory } from '@/utils/itemCategory'
 import { useCategories } from '@/composables/useCategories'
-
-const RECOMMENDED_SUITES = [
-  {
-    id: 'minimax-office-skills',
-    name: 'MiniMax 办公文档套件',
-    provider: 'MiniMax-AI',
-    description:
-      'MiniMax 开源的办公文档 Skills 合集，覆盖 DOCX、PDF、XLSX 与 PPTX 演示文稿的创建与格式化。',
-    source: 'https://modelscope.cn/collections/MiniMax/MiniMax-Office-skills',
-    skills: [
-      {
-        slug: 'pptx-generator',
-        name: 'pptx-generator',
-        description:
-          '生成、编辑和阅读 PowerPoint 演示文稿。使用 PptxGenJS 从头开始创建，通过 XML 工作流编辑现有的 PPTX，或使用 markitdown 提取文本。'
-      },
-      {
-        slug: 'minimax-docx',
-        name: 'minimax-docx',
-        description:
-          '使用 OpenXML SDK（.NET）进行专业的 DOCX 文档创建、编辑和格式化，支持模板应用与 XSD 验证门控检查。'
-      },
-      {
-        slug: 'minimax-xlsx',
-        name: 'minimax-xlsx',
-        description:
-          '创建、读取、分析、编辑或验证 Excel/电子表格文件，支持公式重算校验与专业财务格式标准。'
-      },
-      {
-        slug: 'minimax-pdf',
-        name: 'minimax-pdf',
-        description: '高视觉质量与设计感的 PDF 生成、表单字段填写、样式转换与专业打印级文档排版。'
-      }
-    ]
-  },
-  {
-    id: 'skill-builder-suite',
-    name: 'Skill 能力与进化套件',
-    provider: 'Community',
-    description: '用于 Agent 技能发现、创建、评测调优与自主进化的核心工具合集。',
-    skills: [
-      {
-        slug: 'skill-creator',
-        name: 'skill-creator',
-        source: 'https://modelscope.cn/skills/@anthropics/skill-creator',
-        description: '创建新技能、修改与优化现有技能，并通过方差基准分析评测技能表现与调优描述。'
-      },
-      {
-        slug: 'find-skills',
-        name: 'find-skills',
-        source: 'https://modelscope.cn/skills/@vercel-labs/find-skills',
-        description: '协助智能体根据用户需求检索并发现可安装的开源 Agent Skills，动态扩展自身能力。'
-      },
-      {
-        slug: 'self-improving-agent',
-        name: 'self-improving-agent',
-        source: 'https://github.com/zhaono1/agent-playbook',
-        description: '通用自我进化技能，基于多重记忆架构从经验与错误中持续学习并自我迭代。'
-      }
-    ]
-  }
-]
 
 const router = useRouter()
 
@@ -654,6 +622,14 @@ const togglingSkillSlugs = ref([])
 
 const skills = ref([])
 const skillPreviewVisible = ref(false)
+
+// 提交到市场相关状态
+const submitModalVisible = ref(false)
+const submitSkillId = ref(null)
+const submitSkillName = ref('')
+const submitSkillDescription = ref('')
+const submitSkillCategoryId = ref(null)
+const submitIsUpdate = ref(false)
 
 const { categories: apiCategories, loadCategories } = useCategories('skill')
 
@@ -761,10 +737,6 @@ const installedPersonalSkillKeys = computed(() => {
   return keys
 })
 
-const recommendedSuiteCards = computed(() =>
-  RECOMMENDED_SUITES.map((suite) => ({ ...suite, isSuite: true }))
-)
-
 const filteredInstalledSkills = computed(() => {
   let result = installedSkillCards.value
   if (selectedCategory.value !== 'all') {
@@ -780,14 +752,6 @@ const categoryCounts = computed(() => {
   return counts
 })
 const skillGroups = computed(() => [
-  {
-    key: 'recommended',
-    title: '推荐',
-    skills:
-      isBatchDeleteMode.value || selectedCategory.value !== 'all'
-        ? []
-        : recommendedSuiteCards.value.filter(matchesSearch)
-  },
   {
     key: 'personal',
     title: '个人技能',
@@ -918,17 +882,46 @@ const sourceTypeLabel = (sourceType) => {
 /** 返回 Skill 共享范围的简短展示文案。 */
 const getSkillShareLabel = (skill) => getShareConfigLabel(skill?.share_config)
 
+/** 返回技能来源图标组件 */
+const getSourceIcon = (skill) => {
+  if (skill.market_entry_id) return Store
+  if (skill.sourceScope === 'personal') return User
+  if (skill.sourceType === 'builtin') return Monitor
+  if (skill.sourceType === 'remote' || skill.sourceType === 'market') return CloudDownload
+  return null
+}
+
+/** 返回技能来源图标的颜色 */
+const getSourceIconColor = (skill) => {
+  if (skill.market_entry_id) return 'var(--color-info-600)'
+  if (skill.sourceScope === 'personal') return 'var(--gray-500)'
+  if (skill.sourceType === 'builtin') return 'var(--color-info-600)'
+  if (skill.sourceType === 'remote' || skill.sourceType === 'market') return 'var(--color-accent-600)'
+  return 'var(--gray-400)'
+}
+
 const skillCardTags = (skill) => {
-  if (skill.sourceScope === 'personal') {
-    return [
-      { name: '个人技能', color: 'gray' },
-      ...(skill.overrides_shared ? [{ name: '覆盖共享版本', color: 'orange' }] : [])
-    ]
+  const tags = []
+
+  // 版本标签已移至卡片右上角 badge 插槽
+
+  // 作者标签（优先显示昵称）
+  if (skill.author_nickname) {
+    tags.push({ name: `作者: ${skill.author_nickname}`, color: 'gray' })
+  } else if (skill.author_uid) {
+    tags.push({ name: `作者: ${skill.author_uid}`, color: 'gray' })
+  } else if (skill.sourceType === 'builtin') {
+    tags.push({ name: '作者: 系统', color: 'gray' })
+  } else if (skill.market_entry_id || skill.sourceType === 'market') {
+    tags.push({ name: '作者: 未知', color: 'gray' })
   }
-  return [
-    { name: getSkillShareLabel(skill), color: 'gray' },
-    ...(skill.shadowed_by_personal ? [{ name: '已被个人版本覆盖', color: 'orange' }] : [])
-  ]
+
+  // 被个人版本覆盖的提示
+  if (skill.shadowed_by_personal) {
+    tags.push({ name: '已被个人版本覆盖', color: 'orange' })
+  }
+
+  return tags
 }
 
 const canManageSkill = (skill) => skill?.can_manage !== false
@@ -1010,6 +1003,22 @@ const navigateToDetail = (skill) => {
 
 const closeSkillPreview = () => {
   skillPreviewVisible.value = false
+}
+
+const openSubmitToMarket = () => {
+  if (!previewSkill.value?.id) return
+  submitSkillId.value = previewSkill.value.id
+  submitSkillName.value = formatExtensionCardTitle(previewSkill.value.name) || ''
+  submitSkillDescription.value = previewSkill.value.description || ''
+  submitSkillCategoryId.value = previewSkill.value.resolvedCategoryId || null
+  // 检查是否已经提交过（通过 market_entry_id 判断）
+  submitIsUpdate.value = !!previewSkill.value.market_entry_id
+  submitModalVisible.value = true
+}
+
+const handleSubmitSuccess = () => {
+  submitModalVisible.value = false
+  closeSkillPreview()
 }
 
 const openSkillPreview = async (skill) => {
@@ -1233,14 +1242,6 @@ const closeInstallFlow = () => {
   installFlowOpen.value = false
   installFlow.value = null
   if (wasRemoteFlow) resetRemoteSelection()
-}
-
-const openRecommendedSuite = (suite) => {
-  openInstallFlow({
-    kind: 'suite',
-    suite,
-    installedSlugs: [...installedPersonalSkillKeys.value]
-  })
 }
 
 const handleInstallFlowCompleted = async ({ success, failed }) => {
@@ -1977,6 +1978,25 @@ defineExpose({
       color: var(--gray-800);
     }
   }
+}
+
+.version-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-accent-700);
+  background: var(--color-accent-50);
+  border-radius: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.source-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 2px;
 }
 </style>
 

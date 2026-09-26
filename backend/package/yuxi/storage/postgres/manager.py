@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 14
+BUSINESS_SCHEMA_VERSION = 17
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -1608,6 +1608,13 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS skills ADD COLUMN IF NOT EXISTS market_version_id INTEGER",
             "CREATE INDEX IF NOT EXISTS ix_skills_author_uid ON skills(author_uid)",
             "CREATE INDEX IF NOT EXISTS ix_skills_market_entry_id ON skills(market_entry_id)",
+            # ── v16: 用户昵称字段 ──
+            "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS nickname VARCHAR(128)",
+            "CREATE INDEX IF NOT EXISTS ix_users_nickname ON users(nickname)",
+            # ── v17: 技能提交安全扫描字段 ──
+            "ALTER TABLE IF EXISTS skill_market_submissions ADD COLUMN IF NOT EXISTS scan_score INTEGER",
+            "ALTER TABLE IF EXISTS skill_market_submissions ADD COLUMN IF NOT EXISTS scan_findings JSONB",
+            "ALTER TABLE IF EXISTS skill_market_submissions ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMP WITHOUT TIME ZONE",
         ]
         async with self.async_engine.begin() as conn:
             # 历史未绑定用户的 API Key 会在下方迁移语句里被静默删除，先计数告警

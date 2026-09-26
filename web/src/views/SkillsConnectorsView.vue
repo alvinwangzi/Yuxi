@@ -12,7 +12,23 @@
 
     <div v-if="!isDetailPage" class="skills-content">
       <div v-if="activeTab === 'skills'" class="tab-panel">
-        <SkillCardList ref="skillsRef" />
+        <!-- 技能面板内二级 Tab：技能列表 / 技能市场 / 技能审批(管理员) -->
+        <div class="skills-sub-tabs">
+          <a-tabs v-model:activeKey="skillSubTab" size="small">
+            <a-tab-pane key="list" tab="技能列表" />
+            <a-tab-pane key="market" tab="技能市场" />
+            <a-tab-pane v-if="userStore.isAdmin" key="approval" tab="技能审批" />
+          </a-tabs>
+        </div>
+        <div v-if="skillSubTab === 'list'" class="sub-tab-panel">
+          <SkillCardList ref="skillsRef" />
+        </div>
+        <div v-if="skillSubTab === 'market'" class="sub-tab-panel">
+          <SkillMarketPanel />
+        </div>
+        <div v-if="skillSubTab === 'approval' && userStore.isAdmin" class="sub-tab-panel">
+          <MarketApprovalPanel />
+        </div>
       </div>
       <div v-if="userStore.isAdmin && activeTab === 'tools'" class="tab-panel">
         <ToolsCardList ref="toolsRef" />
@@ -36,6 +52,8 @@ import ToolsCardList from '@/components/extensions/ToolsCardList.vue'
 import McpCardList from '@/components/extensions/McpCardList.vue'
 import SkillCardList from '@/components/extensions/SkillCardList.vue'
 import ChannelCardList from '@/components/extensions/ChannelCardList.vue'
+import SkillMarketPanel from '@/components/marketplace/SkillMarketPanel.vue'
+import MarketApprovalPanel from '@/components/marketplace/MarketApprovalPanel.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import { useUserStore } from '@/stores/user'
 
@@ -43,6 +61,7 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const activeTab = ref(null)
+const skillSubTab = ref('list')
 const skillsRef = ref(null)
 const toolsRef = ref(null)
 const mcpRef = ref(null)
@@ -93,13 +112,16 @@ const activeChildLoading = computed(() => {
   const child = refMap[activeTab.value]
   return child?.value?.loading || false
 })
-
 watch(
   () => [route.query.tab, userStore.isAdmin],
   ([tab]) => {
     const nextTab = normalizeTab(tab)
     if (activeTab.value !== nextTab) activeTab.value = nextTab
     if (tab && tab !== nextTab) replaceTabQuery(nextTab)
+    // 非管理员时重置技能子 Tab，避免停留在审批页
+    if (!userStore.isAdmin && skillSubTab.value === 'approval') {
+      skillSubTab.value = 'list'
+    }
   },
   { immediate: true }
 )
@@ -127,6 +149,22 @@ watch(activeTab, (tab) => {
 
     .tab-panel {
       height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .skills-sub-tabs {
+      padding: 0 16px;
+      border-bottom: 1px solid #f0f0f0;
+
+      :deep(.ant-tabs-nav) {
+        margin-bottom: 0;
+      }
+    }
+
+    .sub-tab-panel {
+      flex: 1;
       min-height: 0;
       overflow-y: auto;
     }

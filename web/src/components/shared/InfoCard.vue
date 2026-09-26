@@ -56,6 +56,9 @@
           <span class="info-card-name" :title="title">{{ title }}</span>
           <span v-if="subtitle" class="info-card-subtitle" :title="subtitle">{{ subtitle }}</span>
         </div>
+        <div v-if="$slots.badge" class="info-card-badge">
+          <slot name="badge" />
+        </div>
         <div
           v-if="$slots.status || actionLabel || status || $slots.actions"
           class="info-card-status"
@@ -204,6 +207,13 @@ const normalizedTags = computed(() => {
     display: flex;
     align-items: center;
     gap: 10px;
+    position: relative;
+  }
+
+  &-badge {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
   }
 
   &-icon {

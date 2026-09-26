@@ -15,6 +15,13 @@
       <a-form-item label="技能描述" required>
         <a-textarea v-model:value="form.description" :rows="3" placeholder="面向使用者的功能说明" />
       </a-form-item>
+      <a-form-item label="技能分类">
+        <a-select v-model:value="form.category_id" placeholder="选择分类（可选）" allow-clear>
+          <a-select-option v-for="cat in categories" :key="cat.id" :value="cat.id">
+            {{ cat.label }}
+          </a-select-option>
+        </a-select>
+      </a-form-item>
       <a-form-item label="更新类型" required>
         <a-select v-model:value="form.change_type" placeholder="选择更新类型">
           <a-select-option value="minor" :disabled="!isUpdate">新增功能（次版本号 +1）</a-select-option>
@@ -33,12 +40,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { marketplaceApi } from '@/apis/marketplace_api'
+import { categoryApi } from '@/apis/category_api'
 
 const props = defineProps({
   skillId: { type: Number, required: true },
+  skillName: { type: String, default: '' },
+  skillDescription: { type: String, default: '' },
+  skillCategoryId: { type: Number, default: null },
   isUpdate: { type: Boolean, default: false },
 })
 
@@ -46,11 +57,25 @@ const emit = defineEmits(['success', 'cancel'])
 
 const visible = ref(true)
 const submitting = ref(false)
+const categories = ref([])
 const form = reactive({
-  title: '',
-  description: '',
+  title: props.skillName || '',
+  description: props.skillDescription || '',
+  category_id: props.skillCategoryId || null,
   change_type: 'minor',
   submission_note: '',
+})
+
+// 加载分类列表
+onMounted(async () => {
+  try {
+    const res = await categoryApi.list('skill')
+    if (res.success) {
+      categories.value = res.data || []
+    }
+  } catch {
+    // 静默失败，分类为可选项
+  }
 })
 
 const previewVersion = computed(() => {
@@ -74,6 +99,7 @@ const handleSubmit = async () => {
       original_skill_id: props.skillId,
       title: form.title,
       description: form.description,
+      category_id: form.category_id,
       change_type: form.change_type,
       submission_note: form.submission_note,
     })

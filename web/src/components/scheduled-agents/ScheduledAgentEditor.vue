@@ -954,14 +954,9 @@ function cancelAction() {
     width: 100%;
   }
 
-<<<<<<< HEAD
-  .setting-row {
-    grid-template-columns: 80px 1fr;
-=======
   .setting-row,
   .frequency-row .frequency-content {
     grid-template-columns: 80px minmax(0, 1fr);
->>>>>>> main
   }
 
   .weekday-options {

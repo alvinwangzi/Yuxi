@@ -10,6 +10,7 @@ export const useUserStore = defineStore('user', () => {
   const userId = ref(null)
   const username = ref('')
   const uid = ref('')
+  const nickname = ref('')
   const phoneNumber = ref('')
   const avatar = ref('')
   const userRole = ref('')
@@ -28,6 +29,7 @@ export const useUserStore = defineStore('user', () => {
     userId.value = data.user_id
     username.value = data.username
     uid.value = data.uid
+    nickname.value = data.nickname || ''
     phoneNumber.value = data.phone_number || ''
     avatar.value = data.avatar || ''
     userRole.value = data.role
@@ -53,6 +55,7 @@ export const useUserStore = defineStore('user', () => {
     userId.value = null
     username.value = ''
     uid.value = ''
+    nickname.value = ''
     phoneNumber.value = ''
     avatar.value = ''
     userRole.value = ''
@@ -181,6 +184,7 @@ export const useUserStore = defineStore('user', () => {
       userId.value = userData.id
       username.value = userData.username
       uid.value = userData.uid
+      nickname.value = userData.nickname || ''
       phoneNumber.value = userData.phone_number || ''
       avatar.value = userData.avatar || ''
       userRole.value = userData.role
@@ -203,6 +207,9 @@ export const useUserStore = defineStore('user', () => {
       if (typeof userData.username === 'string') {
         username.value = userData.username
       }
+      if (typeof userData.nickname !== 'undefined') {
+        nickname.value = userData.nickname || ''
+      }
       if (typeof userData.phone_number !== 'undefined') {
         phoneNumber.value = userData.phone_number || ''
       }
@@ -220,6 +227,7 @@ export const useUserStore = defineStore('user', () => {
     userId,
     username,
     uid,
+    nickname,
     phoneNumber,
     avatar,
     userRole,

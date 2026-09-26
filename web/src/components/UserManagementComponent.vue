@@ -191,6 +191,15 @@
           </div>
         </a-form-item>
 
+        <!-- 昵称字段 -->
+        <a-form-item label="昵称" class="form-item">
+          <a-input
+            v-model:value="userManagement.form.nickname"
+            placeholder="请输入昵称（可选，用于展示作者等信息）"
+            :maxlength="50"
+          />
+        </a-form-item>
+
         <!-- 手机号字段 -->
         <a-form-item label="手机号" class="form-item">
           <a-input
@@ -302,6 +311,7 @@ const userManagement = reactive({
   form: {
     username: '',
     generatedUid: '', // 自动生成的uid
+    nickname: '', // 昵称
     phoneNumber: '', // 手机号
     password: '',
     confirmPassword: '',
@@ -528,6 +538,7 @@ const showEditUserModal = (user) => {
   userManagement.form = {
     username: user.username,
     generatedUid: user.uid || '', // 编辑模式显示现有的uid
+    nickname: user.nickname || '',
     phoneNumber: user.phone_number || '',
     password: '',
     confirmPassword: '',
@@ -589,6 +600,11 @@ const handleUserFormSubmit = async () => {
         username: userManagement.form.username.trim()
       }
 
+      // 添加昵称字段
+      if (userManagement.form.nickname) {
+        updateData.nickname = userManagement.form.nickname.trim()
+      }
+
       // 添加手机号字段
       if (userManagement.form.phoneNumber) {
         updateData.phone_number = userManagement.form.phoneNumber
@@ -612,6 +628,11 @@ const handleUserFormSubmit = async () => {
         username: userManagement.form.username.trim(),
         password: userManagement.form.password,
         role: userManagement.form.role
+      }
+
+      // 添加昵称字段
+      if (userManagement.form.nickname) {
+        createData.nickname = userManagement.form.nickname.trim()
       }
 
       // 超级管理员可以指定部门

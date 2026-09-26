@@ -170,6 +170,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String, nullable=False, unique=True, index=True)  # 显示名称
     uid = Column(String, nullable=False, unique=True, index=True)  # 登录标识
+    nickname = Column(String(128), nullable=True, index=True)  # 用户昵称（用于技能作者等展示）
     phone_number = Column(String, nullable=True, unique=True, index=True)  # 手机号
     avatar = Column(String, nullable=True)  # 头像URL
     password_hash = Column(String, nullable=False)
@@ -204,6 +205,7 @@ class User(Base):
             "id": self.id,
             "username": self.username,
             "uid": self.uid,
+            "nickname": self.nickname,
             "phone_number": self.phone_number,
             "avatar": normalize_public_minio_url(self.avatar),
             "role": self.role,
@@ -1682,3 +1684,7 @@ class RoleTemplate(Base):
         if include_content:
             result["content"] = self.content
         return result
+
+
+# 导入市场模型以注册外键关系到 SQLAlchemy metadata（避免循环导入）
+import yuxi.marketplace.models  # noqa: E402, F401
