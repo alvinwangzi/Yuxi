@@ -125,7 +125,7 @@ async def main() -> None:
                 "business",
                 business_version,
                 BUSINESS_SCHEMA_VERSION,
-                upgrade_from=(2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+                upgrade_from=(2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
             )
             knowledge_version = versions.get("knowledge")
             _require_supported_version(
@@ -145,7 +145,7 @@ async def main() -> None:
                     await rewrite_v071_workdir_paths(session)
                     await verify_workdir_bindings(session)
                     await session.commit()
-            if business_version in {None, 2, 7, 8}:
+            if business_version in {None, 2, 7, 8, 17}:
                 await pg_manager.ensure_business_schema()
                 if business_version is None:
                     await pg_manager.setup_langgraph_checkpointer()
@@ -156,7 +156,7 @@ async def main() -> None:
             elif business_version == 12:
                 # v12 → v13: workflow_step_runs 唯一约束（防止 ARQ 重试创建重复记录）
                 await pg_manager.ensure_business_schema()
-            if business_version in {None, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
+            if business_version in {None, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
                 await pg_manager.ensure_business_schema()
                 await pg_manager.record_schema_version("business", BUSINESS_SCHEMA_VERSION)
 

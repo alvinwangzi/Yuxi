@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 17
+BUSINESS_SCHEMA_VERSION = 18
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -1760,12 +1760,14 @@ class PostgresManager(metaclass=SingletonMeta):
                     "ON CONFLICT (entity_type, slug) DO NOTHING"
                 ), {"et": entity_type, "slug": slug, "label": label, "so": i})
         else:
-            # 删除未被实体引用的旧版内置分类
+            # 删除未被实体引用的旧版内置分类（同时检查 skills 和 skill_market_entries）
             await conn.execute(text(
                 "DELETE FROM custom_categories "
                 "WHERE entity_type = :et AND is_builtin = TRUE "
                 "  AND id NOT IN ("
                 "    SELECT COALESCE(category_id, -1) FROM skills WHERE category_id IS NOT NULL"
+                "    UNION"
+                "    SELECT COALESCE(category_id, -1) FROM skill_market_entries WHERE category_id IS NOT NULL"
                 "  )"
             ), {"et": entity_type})
 
