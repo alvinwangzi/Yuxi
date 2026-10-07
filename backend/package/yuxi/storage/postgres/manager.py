@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 19
+BUSINESS_SCHEMA_VERSION = 20
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -488,7 +488,7 @@ class PostgresManager(metaclass=SingletonMeta):
         """
         self._check_initialized()
         async with self.async_engine.begin() as conn:
-            for name in ("tools", "knowledges", "skills", "subagents", "mcps", "preload_skills"):
+            for name in ("tools", "knowledges", "skills", "subagents", "mcps", "preload_skills", "connectors"):
                 replacement = '"all"' if name in {"tools", "knowledges", "skills", "subagents"} else "[]"
                 await conn.execute(
                     text("""
@@ -1641,6 +1641,163 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS skill_market_submissions ADD COLUMN IF NOT EXISTS scan_score INTEGER",
             "ALTER TABLE IF EXISTS skill_market_submissions ADD COLUMN IF NOT EXISTS scan_findings JSONB",
             "ALTER TABLE IF EXISTS skill_market_submissions ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMP WITHOUT TIME ZONE",
+            # ── v18→v20: 第三方业务系统连接器 ──
+            """
+            CREATE TABLE IF NOT EXISTS connectors (
+                id SERIAL PRIMARY KEY,
+                slug VARCHAR(80) NOT NULL,
+                name VARCHAR(128) NOT NULL,
+                description TEXT,
+                connector_type VARCHAR(64) NOT NULL,
+                config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                revision INTEGER NOT NULL DEFAULT 1,
+                read_scope JSONB NOT NULL DEFAULT '{"access_level": "deny"}'::jsonb,
+                write_scope JSONB NOT NULL DEFAULT '{"access_level": "deny"}'::jsonb,
+                created_by VARCHAR(64),
+                updated_by VARCHAR(64),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                deleted_at TIMESTAMPTZ
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_connectors_slug ON connectors(slug)",
+            "CREATE INDEX IF NOT EXISTS ix_connectors_enabled ON connectors(enabled)",
+            "CREATE INDEX IF NOT EXISTS ix_connectors_deleted_at ON connectors(deleted_at)",
+            """
+            CREATE TABLE IF NOT EXISTS connector_credentials (
+                id SERIAL PRIMARY KEY,
+                connector_id INTEGER NOT NULL REFERENCES connectors(id),
+                credential_key VARCHAR(128) NOT NULL,
+                credential_value BYTEA NOT NULL,
+                key_id VARCHAR(64),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT uq_connector_credentials_key UNIQUE (connector_id, credential_key)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_connector_credentials_connector_id ON connector_credentials(connector_id)",
+            """
+            CREATE TABLE IF NOT EXISTS connector_operations (
+                id SERIAL PRIMARY KEY,
+                connector_id INTEGER NOT NULL REFERENCES connectors(id),
+                slug VARCHAR(128) NOT NULL,
+                name VARCHAR(256) NOT NULL,
+                description TEXT,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                revision INTEGER NOT NULL DEFAULT 1,
+                operation_type VARCHAR(10) NOT NULL,
+                http_method VARCHAR(10) NOT NULL DEFAULT 'GET',
+                endpoint_template VARCHAR(1024) NOT NULL,
+                query_template JSONB,
+                body_template JSONB,
+                request_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+                response_mapping JSONB,
+                response_type VARCHAR(10) NOT NULL DEFAULT 'json',
+                approval_policy VARCHAR(20) NOT NULL DEFAULT 'required',
+                retry_policy JSONB,
+                remote_idempotency JSONB,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT uq_connector_operations_slug UNIQUE (connector_id, slug),
+                CONSTRAINT ck_connector_operations_type CHECK (operation_type IN ('read', 'write')),
+                CONSTRAINT ck_connector_operations_approval CHECK (approval_policy IN ('required', 'preauthorized'))
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_connector_operations_connector_id ON connector_operations(connector_id)",
+            """
+            CREATE TABLE IF NOT EXISTS connector_usage_logs (
+                id VARCHAR(36) PRIMARY KEY,
+                connector_id INTEGER NOT NULL REFERENCES connectors(id),
+                operation_id INTEGER REFERENCES connector_operations(id),
+                connector_slug VARCHAR(80) NOT NULL,
+                operation_slug VARCHAR(128) NOT NULL,
+                operation_type VARCHAR(10) NOT NULL,
+                actor_uid VARCHAR(64) NOT NULL,
+                consumer_type VARCHAR(32) NOT NULL,
+                agent_slug VARCHAR(80),
+                agent_request_id VARCHAR(64),
+                agent_run_id VARCHAR(64),
+                workflow_id INTEGER,
+                workflow_run_id INTEGER,
+                step_id VARCHAR(100),
+                step_execution_id VARCHAR(128),
+                tool_call_id VARCHAR(128),
+                logical_call_key VARCHAR(256) NOT NULL,
+                request_digest VARCHAR(128),
+                connector_revision INTEGER NOT NULL,
+                operation_revision INTEGER NOT NULL,
+                status VARCHAR(32) NOT NULL DEFAULT 'awaiting_approval',
+                remote_outcome VARCHAR(20),
+                approval_policy VARCHAR(20),
+                approved_by VARCHAR(64),
+                approved_at TIMESTAMPTZ,
+                approval_expires_at TIMESTAMPTZ,
+                approval_digest VARCHAR(128),
+                rejected_by VARCHAR(64),
+                rejection_reason TEXT,
+                params_ciphertext BYTEA,
+                execution_snapshot_ciphertext BYTEA,
+                result_ciphertext BYTEA,
+                key_id VARCHAR(64),
+                request_summary JSONB,
+                response_summary JSONB,
+                response_status INTEGER,
+                provider_request_id VARCHAR(256),
+                error_code VARCHAR(64),
+                error_summary TEXT,
+                duration_ms INTEGER,
+                owner_id VARCHAR(128),
+                owner_attempt VARCHAR(64),
+                lease_expires_at TIMESTAMPTZ,
+                heartbeat_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_connector_usage_logs_logical_call_key ON connector_usage_logs(logical_call_key)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_connector_id ON connector_usage_logs(connector_id)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_operation_id ON connector_usage_logs(operation_id)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_actor_created ON connector_usage_logs(actor_uid, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_connector_created ON connector_usage_logs(connector_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_status_lease ON connector_usage_logs(status, lease_expires_at)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_agent_run ON connector_usage_logs(agent_run_id)",
+            "CREATE INDEX IF NOT EXISTS ix_connector_usage_logs_workflow_run ON connector_usage_logs(workflow_run_id)",
+            """
+            CREATE TABLE IF NOT EXISTS connector_operation_attempts (
+                id SERIAL PRIMARY KEY,
+                invocation_id VARCHAR(36) NOT NULL REFERENCES connector_usage_logs(id),
+                attempt_no INTEGER NOT NULL,
+                owner_attempt VARCHAR(64),
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                send_state VARCHAR(20),
+                response_status INTEGER,
+                provider_request_id VARCHAR(256),
+                error_code VARCHAR(64),
+                error_summary TEXT,
+                duration_ms INTEGER,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT uq_connector_attempts_number UNIQUE (invocation_id, attempt_no)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_connector_operation_attempts_invocation_id ON connector_operation_attempts(invocation_id)",
+            # ── v20: 工作流运行表扩展（连接器支持） ──
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS definition_snapshot JSONB",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS resume_state JSONB",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS resume_generation INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS dispatch_pending BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS next_dispatch_at TIMESTAMPTZ",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS owner_id VARCHAR(128)",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS owner_attempt VARCHAR(64)",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
+            "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
+            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS step_execution_id VARCHAR(128)",
+            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS execution_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS pending_connector_invocation_id INTEGER",
+            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS agent_request_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS agent_run_id VARCHAR(64)",
+            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS agent_thread_id VARCHAR(64)",
         ]
         async with self.async_engine.begin() as conn:
             # 历史未绑定用户的 API Key 会在下方迁移语句里被静默删除，先计数告警

@@ -72,6 +72,9 @@ def _init_executor(step_type: str) -> None:
     elif step_type == "output":
         from yuxi.workflows.executors.output_executor import OutputStepExecutor
         _EXECUTORS[step_type] = OutputStepExecutor()
+    elif step_type == "connector":
+        from yuxi.workflows.executors.connector_executor import ConnectorStepExecutor
+        _EXECUTORS[step_type] = ConnectorStepExecutor()
     else:
         logger.error(f"未知的步骤类型: {step_type}")
         _EXECUTORS[step_type] = None

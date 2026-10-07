@@ -54,7 +54,7 @@
 
 <script setup>
 import { Handle, Position } from '@vue-flow/core'
-import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Play, Flag } from '@lucide/vue'
+import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Play, Flag, Plug } from '@lucide/vue'
 import { computed } from 'vue'
 
 // 分支颜色调色板（8 色循环）
@@ -77,6 +77,7 @@ const stepTypeLabels = {
   condition: '条件分支',
   approval: '人工审批',
   script: '脚本执行',
+  connector: '连接器',
   output: '输出',
   end: '结束'
 }
@@ -89,6 +90,7 @@ const iconMap = {
   condition: GitBranch,
   approval: UserCheck,
   script: Code2,
+  connector: Plug,
   output: Send,
   end: Flag
 }
@@ -248,6 +250,7 @@ const branchBgFor = (idx) => {
 .node-approval .node-icon { background: #ede9fe; color: #7c3aed; }
 .node-script .node-icon { background: #f3f4f6; color: #4b5563; }
 .node-output .node-icon { background: #ecfdf5; color: #059669; }
+.node-connector .node-icon { background: #e0f2fe; color: #0284c7; }
 .node-start .node-icon { background: #dcfce7; color: #16a34a; }
 .node-end .node-icon { background: #f3f4f6; color: #6b7280; }
 </style>

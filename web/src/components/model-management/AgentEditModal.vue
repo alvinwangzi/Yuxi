@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { message } from 'ant-design-vue'
+import { useRouter } from 'vue-router'
 import {
   Bot,
   Microscope,
@@ -27,6 +28,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['saved'])
+
+const router = useRouter()
 
 const userStore = useUserStore()
 const agentStore = useAgentStore()
@@ -309,6 +312,24 @@ const closeAgentModal = async () => {
   await restoreChatAgentSelectionIfNeeded()
 }
 
+// 处理子组件请求跳转：关闭编辑弹窗后导航到对应管理页
+const handleNavigateRequest = (kind) => {
+  showAgentModal.value = false
+  setTimeout(() => {
+    switch (kind) {
+      case 'mcps':
+        router.push({ path: '/extensions', query: { tab: 'mcp' } })
+        break
+      case 'subagents':
+        router.push({ path: '/agent-manage', query: { tab: 'agents' } })
+        break
+      case 'connectors':
+        router.push({ path: '/extensions', query: { tab: 'connectors' } })
+        break
+    }
+  }, 150)
+}
+
 const beforeAgentIconUpload = (file) => {
   if (!file.type.startsWith('image/')) {
     message.error('只能上传图片文件')
@@ -576,7 +597,11 @@ defineExpose({
           v-show="isRuntimeAgentModalTab(agentModalActiveTab)"
           class="agent-modal-section runtime-section"
         >
-          <AgentRuntimeConfigForm :segment="runtimeConfigSegment" :show-segmented="false" />
+          <AgentRuntimeConfigForm
+            :segment="runtimeConfigSegment"
+            :show-segmented="false"
+            @navigate-request="handleNavigateRequest"
+          />
         </section>
       </div>
     </div>

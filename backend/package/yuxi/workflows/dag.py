@@ -157,6 +157,15 @@ def validate_definition(definition: dict[str, Any]) -> list[str]:
         if stype not in VALID_STEP_TYPES:
             errors.append(f"步骤 {sid or i} 的类型 '{stype}' 无效")
 
+        if stype == "connector":
+            if not step.get("connector_slug"):
+                errors.append(f"connector 步骤 {sid or i} 必须指定 connector_slug")
+            if not step.get("operation_slug"):
+                errors.append(f"connector 步骤 {sid or i} 必须指定 operation_slug")
+            params = step.get("params")
+            if params is not None and not isinstance(params, dict):
+                errors.append(f"connector 步骤 {sid or i} 的 params 必须是对象")
+
         # start/end 是流程边界锚点：最多一个，且 start 不依赖任何步骤
         if stype == "start":
             if step.get("depends_on"):

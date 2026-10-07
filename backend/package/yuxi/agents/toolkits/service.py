@@ -148,6 +148,17 @@ async def resolve_configured_runtime_tools(context) -> list[Any]:
             selected_tool_names.add(tool.name)
             selected_tool_sources[tool.name] = f"MCP '{server_name}'"
 
+    # 连接器动态工具：按 context.connectors 为每个可见操作生成 StructuredTool。
+    from yuxi.agents.connectors.tools import get_connector_tools
+
+    for tool in await get_connector_tools(context):
+        if tool.name in selected_tool_names:
+            source = selected_tool_sources[tool.name]
+            raise RuntimeError(f"工具名冲突：连接器工具 '{tool.name}' 与 {source} 同名")
+        selected_tools.append(tool)
+        selected_tool_names.add(tool.name)
+        selected_tool_sources[tool.name] = "connector"
+
     # Skill 依赖的本地工具：必须随基础工具一起注册进 create_agent 的 ToolNode 才可执行，
     # 否则 Skill 激活后模型虽能发起调用，执行器仍报 "not a valid tool"。
     # 默认绑定给模型的可见性由 SkillsMiddleware 按 Skill 激活状态门控（保持按需加载）。

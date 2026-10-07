@@ -298,6 +298,17 @@ class BaseContext:
         },
     )
 
+    connectors: ResourceSelection = field(
+        default_factory=list,
+        metadata={
+            "name": "连接器",
+            "options": [],
+            "description": "选择可用的第三方业务系统连接器，默认不加载任何连接器。",
+            "type": "list",
+            "kind": "connectors",
+        },
+    )
+
     summary_threshold: int = field(
         default=DEFAULT_SUMMARY_THRESHOLD_K,
         metadata={
@@ -486,6 +497,15 @@ async def resolve_agent_resource_options(
         subagents = await AgentRepository(db).list_visible_subagents(user=user)
         options["subagents"] = [
             _resource_option(agent.slug, agent.name, agent.description) for agent in subagents if agent.slug
+        ]
+    if "connectors" in fields_to_load:
+        from yuxi.repositories.connector_repository import ConnectorRepository
+
+        connectors = await ConnectorRepository(db).list_usable(user)
+        options["connectors"] = [
+            _resource_option(connector.slug, connector.name, connector.description)
+            for connector in connectors
+            if connector.slug
         ]
 
     return options

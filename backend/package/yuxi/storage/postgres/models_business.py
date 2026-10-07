@@ -1,5 +1,6 @@
 """PostgreSQL 业务数据模型 - 用户、部门、对话等相关表"""
 
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,6 +16,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -1546,7 +1548,7 @@ class WorkflowRun(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     workflow_id = Column(Integer, ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(20), nullable=False, default="pending",
-                    comment="pending/running/completed/failed/cancelled")
+                    comment="pending/running/waiting_agent/waiting_approval/completed/failed/cancelled")
     trigger = Column(String(20), nullable=False, default="manual",
                      comment="manual/scheduled/webhook")
 
@@ -1557,6 +1559,16 @@ class WorkflowRun(Base):
     completed_at = Column(DateTime, nullable=True)
     total_tokens = Column(JSON_VALUE, nullable=False, default=dict, comment="汇总 token 消耗")
     error_message = Column(Text, nullable=True)
+
+    definition_snapshot = Column(JSON_VALUE, nullable=True, comment="执行时冻结的工作流定义快照")
+    resume_state = Column(JSON_VALUE, nullable=True, comment="恢复游标：已完成步骤、执行标识、待审批调用")
+    resume_generation = Column(Integer, nullable=False, default=0, comment="恢复代数")
+    dispatch_pending = Column(Boolean, nullable=False, default=False, comment="是否有待补投递的步骤")
+    next_dispatch_at = Column(DateTime, nullable=True, comment="下次投递时间")
+    owner_id = Column(String(128), nullable=True, comment="当前 owner run/worker 标识")
+    owner_attempt = Column(String(64), nullable=True, comment="当前 owner attempt 标识")
+    lease_expires_at = Column(DateTime, nullable=True, comment="owner lease 过期时间")
+    heartbeat_at = Column(DateTime, nullable=True, comment="最后一次心跳时间")
 
     created_by = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=utc_now_naive)
@@ -1573,6 +1585,15 @@ class WorkflowRun(Base):
             "completed_at": format_utc_datetime(self.completed_at),
             "total_tokens": self.total_tokens or {},
             "error_message": self.error_message,
+            "definition_snapshot": self.definition_snapshot,
+            "resume_state": self.resume_state,
+            "resume_generation": self.resume_generation,
+            "dispatch_pending": self.dispatch_pending,
+            "next_dispatch_at": format_utc_datetime(self.next_dispatch_at),
+            "owner_id": self.owner_id,
+            "owner_attempt": self.owner_attempt,
+            "lease_expires_at": format_utc_datetime(self.lease_expires_at),
+            "heartbeat_at": format_utc_datetime(self.heartbeat_at),
             "created_by": self.created_by,
             "created_at": format_utc_datetime(self.created_at),
         }
@@ -1589,9 +1610,9 @@ class WorkflowStepRun(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     workflow_run_id = Column(Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
     step_id = Column(String(100), nullable=False, comment="对应 definition.steps[].id")
-    step_type = Column(String(20), nullable=False, comment="llm/tool/http/condition/approval/script/output")
+    step_type = Column(String(20), nullable=False, comment="llm/tool/http/connector/condition/approval/script/output")
     status = Column(String(20), nullable=False, default="pending",
-                    comment="pending/running/completed/failed/skipped/waiting_approval")
+                    comment="pending/running/waiting_agent/waiting_approval/completed/failed/skipped/cancelled")
 
     input_payload = Column(JSON_VALUE, nullable=False, default=dict, comment="步骤输入（从 context 解析变量）")
     output_payload = Column(JSON_VALUE, nullable=False, default=dict, comment="步骤输出（写入 context）")
@@ -1602,6 +1623,13 @@ class WorkflowStepRun(Base):
     tokens = Column(JSON_VALUE, nullable=False, default=dict, comment="LLM 步骤的 token 消耗")
     execution_layer = Column(Integer, nullable=True, comment="DAG 层级")
     loop_iteration = Column(Integer, nullable=False, default=0, comment="当前循环迭代次数")
+
+    step_execution_id = Column(String(128), nullable=True, comment="当前步骤执行标识，循环新激活生成新值")
+    execution_count = Column(Integer, nullable=False, default=0, comment="步骤激活次数")
+    pending_connector_invocation_id = Column(Integer, nullable=True, comment="待处理的连接器调用 ID")
+    agent_request_id = Column(String(64), nullable=True, comment="关联 Agent 请求 ID")
+    agent_run_id = Column(String(64), nullable=True, comment="关联 Agent 运行 ID")
+    agent_thread_id = Column(String(64), nullable=True, comment="关联 Agent 线程 ID")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1618,6 +1646,12 @@ class WorkflowStepRun(Base):
             "tokens": self.tokens or {},
             "execution_layer": self.execution_layer,
             "loop_iteration": self.loop_iteration,
+            "step_execution_id": self.step_execution_id,
+            "execution_count": self.execution_count,
+            "pending_connector_invocation_id": self.pending_connector_invocation_id,
+            "agent_request_id": self.agent_request_id,
+            "agent_run_id": self.agent_run_id,
+            "agent_thread_id": self.agent_thread_id,
         }
 
 
@@ -1687,6 +1721,334 @@ class RoleTemplate(Base):
         if include_content:
             result["content"] = self.content
         return result
+
+
+# ── 第三方业务系统连接器 ──────────────────────────────────────────────
+
+
+class Connector(Base):
+    """第三方业务系统连接器配置。"""
+
+    __tablename__ = "connectors"
+    __table_args__ = (
+        CheckConstraint("enabled IN (0, 1)", name="ck_connectors_enabled_bool"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String(80), nullable=False, unique=True, comment="唯一标识，创建后不可变")
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    connector_type = Column(String(64), nullable=False, comment="适配器类型：generic_rest/salesforce/feishu_bitable_crm")
+
+    config = Column(JSON_VALUE, nullable=False, default=dict, comment="连接器配置（base_url/auth_type/限制等）")
+    enabled = Column(Boolean, nullable=False, default=True)
+    revision = Column(Integer, nullable=False, default=1, comment="配置版本号，修改配置时递增")
+
+    read_scope = Column(JSON_VALUE, nullable=False, default=lambda: {"access_level": "deny"},
+                        comment="只读权限范围，沿用 yuxi.permissions 结构")
+    write_scope = Column(JSON_VALUE, nullable=False, default=lambda: {"access_level": "deny"},
+                         comment="写权限范围")
+
+    created_by = Column(String(64), nullable=True)
+    updated_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    deleted_at = Column(DateTime, nullable=True, comment="tombstone 标记，非空表示已删除")
+
+    credentials = relationship("ConnectorCredential", back_populates="connector", lazy="selectin")
+    operations = relationship("ConnectorOperation", back_populates="connector", lazy="selectin")
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+    def to_dict(self, *, include_config: bool = True) -> dict[str, Any]:
+        result = {
+            "id": self.id,
+            "slug": self.slug,
+            "name": self.name,
+            "description": self.description or "",
+            "connector_type": self.connector_type,
+            "enabled": self.enabled,
+            "revision": self.revision,
+            "read_scope": self.read_scope or {"access_level": "deny"},
+            "write_scope": self.write_scope or {"access_level": "deny"},
+            "credential_keys": [c.credential_key for c in self.credentials] if self.credentials else [],
+            "operation_count": len([op for op in self.operations if op.enabled]) if self.operations else 0,
+            "created_by": self.created_by,
+            "updated_by": self.updated_by,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+            "deleted_at": format_utc_datetime(self.deleted_at),
+        }
+        if include_config:
+            result["config"] = self.config or {}
+        return result
+
+
+class ConnectorCredential(Base):
+    """连接器凭据（加密存储）。"""
+
+    __tablename__ = "connector_credentials"
+    __table_args__ = (
+        UniqueConstraint("connector_id", "credential_key", name="uq_connector_credentials_key"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connector_id = Column(Integer, ForeignKey("connectors.id"), nullable=False, index=True)
+    credential_key = Column(String(128), nullable=False, comment="凭据标识")
+    credential_value = Column(LargeBinary, nullable=False, comment="Fernet 加密后的凭据值")
+    key_id = Column(String(64), nullable=True, comment="加密使用的 key_id，支持轮换")
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    connector = relationship("Connector", back_populates="credentials")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "connector_id": self.connector_id,
+            "credential_key": self.credential_key,
+            "key_id": self.key_id,
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class ConnectorOperation(Base):
+    """连接器操作定义（读/写）。"""
+
+    __tablename__ = "connector_operations"
+    __table_args__ = (
+        UniqueConstraint("connector_id", "slug", name="uq_connector_operations_slug"),
+        CheckConstraint("operation_type IN ('read', 'write')", name="ck_connector_operations_type"),
+        CheckConstraint("approval_policy IN ('required', 'preauthorized')",
+                        name="ck_connector_operations_approval"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connector_id = Column(Integer, ForeignKey("connectors.id"), nullable=False, index=True)
+    slug = Column(String(128), nullable=False, comment="操作标识，创建后不可变")
+    name = Column(String(256), nullable=False)
+    description = Column(Text, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    revision = Column(Integer, nullable=False, default=1)
+
+    operation_type = Column(String(10), nullable=False, comment="read 或 write")
+    http_method = Column(String(10), nullable=False, default="GET")
+    endpoint_template = Column(String(1024), nullable=False, comment="相对路径模板，支持 {{identifier}}")
+    query_template = Column(JSON_VALUE, nullable=True, comment="查询参数模板")
+    body_template = Column(JSON_VALUE, nullable=True, comment="请求体模板")
+
+    request_schema = Column(JSON_VALUE, nullable=False, default=dict,
+                            comment="JSON Schema Draft 2020-12 受限子集")
+    response_mapping = Column(JSON_VALUE, nullable=True, comment="响应字段映射白名单")
+    response_type = Column(String(10), nullable=False, default="json", comment="json/text/empty")
+
+    approval_policy = Column(String(20), nullable=False, default="required",
+                             comment="required: 每次审批; preauthorized: 管理员预授权")
+    retry_policy = Column(JSON_VALUE, nullable=True, comment="重试策略配置")
+    remote_idempotency = Column(JSON_VALUE, nullable=True, comment="远端幂等性配置")
+
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    connector = relationship("Connector", back_populates="operations")
+
+    def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
+        result = {
+            "id": self.id,
+            "connector_id": self.connector_id,
+            "slug": self.slug,
+            "name": self.name,
+            "description": self.description or "",
+            "enabled": self.enabled,
+            "revision": self.revision,
+            "operation_type": self.operation_type,
+            "http_method": self.http_method,
+            "endpoint_template": self.endpoint_template,
+            "request_schema": self.request_schema or {},
+            "response_type": self.response_type,
+            "approval_policy": self.approval_policy,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+        if include_internal:
+            result["query_template"] = self.query_template
+            result["body_template"] = self.body_template
+            result["response_mapping"] = self.response_mapping
+            result["retry_policy"] = self.retry_policy
+            result["remote_idempotency"] = self.remote_idempotency
+        return result
+
+
+class ConnectorUsageLog(Base):
+    """连接器调用账本（持久化调用记录）。"""
+
+    __tablename__ = "connector_usage_logs"
+    __table_args__ = (
+        Index("ix_connector_usage_logs_actor_created", "actor_uid", "created_at"),
+        Index("ix_connector_usage_logs_connector_created", "connector_id", "created_at"),
+        Index("ix_connector_usage_logs_status_lease", "status", "lease_expires_at"),
+        Index("ix_connector_usage_logs_agent_run", "agent_run_id"),
+        Index("ix_connector_usage_logs_workflow_run", "workflow_run_id"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    connector_id = Column(Integer, ForeignKey("connectors.id"), nullable=False, index=True)
+    operation_id = Column(Integer, ForeignKey("connector_operations.id"), nullable=True, index=True)
+    connector_slug = Column(String(80), nullable=False, comment="调用时连接器 slug 快照")
+    operation_slug = Column(String(128), nullable=False, comment="调用时操作 slug 快照")
+    operation_type = Column(String(10), nullable=False, comment="read/write 快照")
+
+    actor_uid = Column(String(64), nullable=False, index=True, comment="执行操作的用户 uid")
+    consumer_type = Column(String(32), nullable=False, comment="agent/workflow/admin_test")
+    agent_slug = Column(String(80), nullable=True)
+    agent_request_id = Column(String(64), nullable=True)
+    agent_run_id = Column(String(64), nullable=True)
+    workflow_id = Column(Integer, nullable=True)
+    workflow_run_id = Column(Integer, nullable=True)
+    step_id = Column(String(100), nullable=True)
+    step_execution_id = Column(String(128), nullable=True)
+    tool_call_id = Column(String(128), nullable=True)
+
+    logical_call_key = Column(String(256), nullable=False, unique=True,
+                              comment="逻辑调用唯一标识，用于去重")
+    request_digest = Column(String(128), nullable=True, comment="参数+版本+绑定的摘要")
+    connector_revision = Column(Integer, nullable=False, comment="调用时连接器版本")
+    operation_revision = Column(Integer, nullable=False, comment="调用时操作版本")
+
+    status = Column(String(32), nullable=False, default="awaiting_approval",
+                    comment="awaiting_approval/prepared/running/succeeded/failed/rejected/cancelled/unknown")
+    remote_outcome = Column(String(20), nullable=True,
+                            comment="not_sent/succeeded/failed/unknown")
+    approval_policy = Column(String(20), nullable=True)
+    approved_by = Column(String(64), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    approval_expires_at = Column(DateTime, nullable=True)
+    approval_digest = Column(String(128), nullable=True, comment="审批绑定的参数+版本摘要")
+    rejected_by = Column(String(64), nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+
+    params_ciphertext = Column(LargeBinary, nullable=True, comment="加密的业务参数")
+    execution_snapshot_ciphertext = Column(LargeBinary, nullable=True, comment="加密的执行快照（含凭据版本）")
+    result_ciphertext = Column(LargeBinary, nullable=True, comment="加密的有界结果")
+    key_id = Column(String(64), nullable=True, comment="加密使用的 key_id")
+
+    request_summary = Column(JSON_VALUE, nullable=True, comment="脱敏请求摘要（字段白名单投影）")
+    response_summary = Column(JSON_VALUE, nullable=True, comment="脱敏响应摘要")
+    response_status = Column(Integer, nullable=True)
+    provider_request_id = Column(String(256), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    error_summary = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+    owner_id = Column(String(128), nullable=True, comment="当前 owner worker/run 标识")
+    owner_attempt = Column(String(64), nullable=True, comment="当前 owner attempt 标识")
+    lease_expires_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=utc_now_naive, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    connector = relationship("Connector", foreign_keys=[connector_id])
+    operation = relationship("ConnectorOperation", foreign_keys=[operation_id])
+    attempts = relationship("ConnectorOperationAttempt", back_populates="invocation", lazy="selectin")
+
+    def to_dict(self, *, include_encrypted: bool = False) -> dict[str, Any]:
+        result = {
+            "id": self.id,
+            "invocation_id": self.id,
+            "connector_id": self.connector_id,
+            "operation_id": self.operation_id,
+            "connector_slug": self.connector_slug,
+            "operation_slug": self.operation_slug,
+            "operation_type": self.operation_type,
+            "actor_uid": self.actor_uid,
+            "consumer_type": self.consumer_type,
+            "agent_slug": self.agent_slug,
+            "agent_request_id": self.agent_request_id,
+            "agent_run_id": self.agent_run_id,
+            "workflow_id": self.workflow_id,
+            "workflow_run_id": self.workflow_run_id,
+            "step_id": self.step_id,
+            "step_execution_id": self.step_execution_id,
+            "tool_call_id": self.tool_call_id,
+            "logical_call_key": self.logical_call_key,
+            "connector_revision": self.connector_revision,
+            "operation_revision": self.operation_revision,
+            "status": self.status,
+            "remote_outcome": self.remote_outcome,
+            "approval_policy": self.approval_policy,
+            "approved_by": self.approved_by,
+            "approved_at": format_utc_datetime(self.approved_at),
+            "approval_expires_at": format_utc_datetime(self.approval_expires_at),
+            "rejected_by": self.rejected_by,
+            "rejection_reason": self.rejection_reason,
+            "request_summary": self.request_summary,
+            "response_summary": self.response_summary,
+            "response_status": self.response_status,
+            "provider_request_id": self.provider_request_id,
+            "error_code": self.error_code,
+            "error_summary": self.error_summary,
+            "duration_ms": self.duration_ms,
+            "owner_id": self.owner_id,
+            "owner_attempt": self.owner_attempt,
+            "lease_expires_at": format_utc_datetime(self.lease_expires_at),
+            "heartbeat_at": format_utc_datetime(self.heartbeat_at),
+            "created_at": format_utc_datetime(self.created_at),
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+        }
+        if include_encrypted:
+            result["key_id"] = self.key_id
+        return result
+
+
+class ConnectorOperationAttempt(Base):
+    """连接器调用的网络尝试记录。"""
+
+    __tablename__ = "connector_operation_attempts"
+    __table_args__ = (
+        UniqueConstraint("invocation_id", "attempt_no", name="uq_connector_attempts_number"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invocation_id = Column(String(36), ForeignKey("connector_usage_logs.id"), nullable=False, index=True)
+    attempt_no = Column(Integer, nullable=False, comment="尝试序号，从 1 开始")
+    owner_attempt = Column(String(64), nullable=True, comment="此次尝试的 owner 标识")
+
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    send_state = Column(String(20), nullable=True,
+                        comment="not_started/sending/response_received/uncertain")
+    response_status = Column(Integer, nullable=True)
+    provider_request_id = Column(String(256), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    error_summary = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=utc_now_naive)
+
+    invocation = relationship("ConnectorUsageLog", back_populates="attempts")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "invocation_id": self.invocation_id,
+            "attempt_no": self.attempt_no,
+            "owner_attempt": self.owner_attempt,
+            "started_at": format_utc_datetime(self.started_at),
+            "completed_at": format_utc_datetime(self.completed_at),
+            "send_state": self.send_state,
+            "response_status": self.response_status,
+            "provider_request_id": self.provider_request_id,
+            "error_code": self.error_code,
+            "error_summary": self.error_summary,
+            "duration_ms": self.duration_ms,
+            "created_at": format_utc_datetime(self.created_at),
+        }
 
 
 # 导入市场模型以注册外键关系到 SQLAlchemy metadata（避免循环导入）

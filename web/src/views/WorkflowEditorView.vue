@@ -542,6 +542,32 @@
                   </a-form-item>
                 </template>
 
+                <!-- Connector 步骤特有字段 -->
+                <template v-if="selectedStep.type === 'connector'">
+                  <a-form-item label="连接器" required>
+                    <a-input
+                      v-model:value="selectedStep.connector_slug"
+                      placeholder="连接器标识 (connector_slug)"
+                      @change="markDirty"
+                    />
+                  </a-form-item>
+                  <a-form-item label="操作" required>
+                    <a-input
+                      v-model:value="selectedStep.operation_slug"
+                      placeholder="操作标识 (operation_slug)"
+                      @change="markDirty"
+                    />
+                  </a-form-item>
+                  <a-form-item label="调用参数 (JSON)">
+                    <a-textarea
+                      v-model:value="selectedStep._params_json"
+                      :rows="4"
+                      placeholder='{"key": "{{变量名}}"}'
+                      @change="markDirty"
+                    />
+                  </a-form-item>
+                </template>
+
                 <!-- 输出变量名（所有业务步骤通用） -->
                 <a-divider>输出</a-divider>
                 <a-form-item label="输出变量名 (output_key)">
@@ -886,7 +912,7 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import { ArrowLeft, Play, Save, Plus, Trash2, Inbox, Settings, X, ChevronLeft, ChevronRight, History, HelpCircle } from '@lucide/vue'
-import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Flag } from '@lucide/vue'
+import { Bot, Wrench, Globe, GitBranch, UserCheck, Code2, Send, Flag, Plug } from '@lucide/vue'
 import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined } from '@ant-design/icons-vue'
 import WorkflowNode from '@/components/workflow/WorkflowNode.vue'
 import WorkflowEdge from '@/components/workflow/WorkflowEdge.vue'
@@ -977,6 +1003,7 @@ const stepTypes = {
   condition: '条件分支',
   approval: '人工审批',
   script: '脚本执行',
+  connector: '连接器',
   output: '输出'
 }
 
@@ -994,6 +1021,7 @@ const stepIcons = {
   condition: GitBranch,
   approval: UserCheck,
   script: Code2,
+  connector: Plug,
   output: Send,
   end: Flag
 }
@@ -1010,6 +1038,7 @@ function getStepDefaults(type) {
     case 'approval': return { approval_prompt: '' }
     case 'script': return { code: 'function main(context) {\n  // context 包含上游节点的输出变量\n  // 返回结果会作为该节点的 output\n  return { result: "Hello from script" }\n}', language: 'javascript' }
     case 'output': return { format: 'markdown', template: '', delivery: [] }
+    case 'connector': return { connector_slug: '', operation_slug: '', params: {} }
     default: return {}
   }
 }
@@ -1824,6 +1853,7 @@ const getMiniMapColor = (node) => {
     approval: '#8b5cf6',
     script: '#6b7280',
     output: '#10b981',
+    connector: '#0ea5e9',
     end: '#9ca3af'
   }
   return colors[node.data?.stepType] || '#14b8a6'

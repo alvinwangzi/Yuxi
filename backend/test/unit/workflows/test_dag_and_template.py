@@ -169,6 +169,67 @@ class TestValidateDefinition:
         errors = validate_definition(definition)
         assert any("依赖" in e or "depend" in e.lower() for e in errors)
 
+    def test_connector_step_valid(self):
+        """合法 connector 步骤通过校验。"""
+        definition = {
+            "steps": [
+                {
+                    "id": "crm_query",
+                    "type": "connector",
+                    "connector_slug": "salesforce",
+                    "operation_slug": "query_customer",
+                    "params": {"name": "{{customer_name}}"},
+                    "output_key": "crm_result",
+                },
+            ]
+        }
+        errors = validate_definition(definition)
+        assert errors == []
+
+    def test_connector_step_missing_slug(self):
+        """connector 步骤缺少 connector_slug 报错。"""
+        definition = {
+            "steps": [
+                {
+                    "id": "crm_query",
+                    "type": "connector",
+                    "operation_slug": "query_customer",
+                },
+            ]
+        }
+        errors = validate_definition(definition)
+        assert any("connector_slug" in e for e in errors)
+
+    def test_connector_step_missing_operation(self):
+        """connector 步骤缺少 operation_slug 报错。"""
+        definition = {
+            "steps": [
+                {
+                    "id": "crm_query",
+                    "type": "connector",
+                    "connector_slug": "salesforce",
+                },
+            ]
+        }
+        errors = validate_definition(definition)
+        assert any("operation_slug" in e for e in errors)
+
+    def test_connector_step_bad_params_type(self):
+        """connector 步骤 params 非对象报错。"""
+        definition = {
+            "steps": [
+                {
+                    "id": "crm_query",
+                    "type": "connector",
+                    "connector_slug": "salesforce",
+                    "operation_slug": "query_customer",
+                    "params": "not_an_object",
+                },
+            ]
+        }
+        errors = validate_definition(definition)
+        assert any("params" in e for e in errors)
+
 
 class TestLoopIgnoredInDAG:
     """循环字段在 DAG 构建中被忽略。"""

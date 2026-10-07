@@ -8,6 +8,7 @@ from server.routers.auth_dept_router import department
 from server.routers.auth_router import auth
 from server.routers.category_router import router as category_router
 from server.routers.channel_router import channel_router
+from server.routers.connector_router import connectors_admin, connectors_user
 from server.routers.chat_router import chat
 from server.routers.dashboard_router import dashboard
 from server.routers.external_kb_router import external_kb
@@ -52,6 +53,8 @@ router.include_router(tasks)  # /api/tasks/* 后台任务查询与管理
 router.include_router(mcp)  # /api/system/mcp-servers/* MCP 服务管理
 router.include_router(model_providers)  # /api/system/model-providers/* 独立模型配置
 router.include_router(channel_router)  # /api/system/channels/* IM 渠道管理
+router.include_router(connectors_admin)  # /api/system/connectors/* 连接器管理（管理员）
+router.include_router(connectors_user)  # /api/connectors/* 连接器消费（登录用户）
 router.include_router(category_router)  # /api/admin/categories/* 分类管理（CRUD + 排序）
 router.include_router(skills)  # /api/system/skills/* Skills 管理
 router.include_router(user_skills)  # /api/skills/* 用户可用 Skills

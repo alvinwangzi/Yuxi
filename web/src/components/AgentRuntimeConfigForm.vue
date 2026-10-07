@@ -138,6 +138,7 @@
                             刷新
                           </a-button>
                           <a-button
+                            v-if="shouldShowConfigButton(value.kind)"
                             type="link"
                             size="small"
                             @click="navigateToConfigPage(value.kind)"
@@ -312,6 +313,7 @@
               刷新
             </a-button>
             <a-button
+              v-if="shouldShowConfigButton(currentConfigKind)"
               type="text"
               size="small"
               @click="navigateToConfigPage(currentConfigKind)"
@@ -412,7 +414,6 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { message } from 'ant-design-vue'
-import { useRouter } from 'vue-router'
 import { AlertTriangle, Check, Plus, Search, RotateCw, RotateCcw, Settings } from '@lucide/vue'
 import ModelSelectorComponent from '@/components/ModelSelectorComponent.vue'
 import { useAgentStore } from '@/stores/agent'
@@ -441,8 +442,9 @@ const props = defineProps({
   }
 })
 
+const emit = defineEmits(['navigateRequest'])
+
 const agentStore = useAgentStore()
-const router = useRouter()
 
 const { selectedAgent, selectedAgentId, agentConfig, configurableItems } = storeToRefs(agentStore)
 
@@ -463,9 +465,11 @@ const segmentOptions = [
   { label: '其他', value: 'other' }
 ]
 const activeSegment = computed(() => (props.showSegmented ? currentSegment.value : props.segment))
-const RESOURCE_CONFIG_KINDS = new Set(['tools', 'knowledges', 'mcps', 'skills', 'subagents'])
+const RESOURCE_CONFIG_KINDS = new Set(['tools', 'knowledges', 'mcps', 'skills', 'subagents', 'connectors'])
 /** 判断配置项是否属于可管理的资源分组。 */
 const isResourceConfigKind = (kind) => RESOURCE_CONFIG_KINDS.has(kind)
+/** 是否显示"配置"跳转按钮：MCP、子智能体和连接器需要跳转到管理页。 */
+const shouldShowConfigButton = (kind) => kind === 'mcps' || kind === 'subagents' || kind === 'connectors'
 const KNOWLEDGE_BASE_SKILL_SLUG = 'knowledge-base'
 
 /** 读取当前表单有效的资源候选项。 */
@@ -532,31 +536,13 @@ const refreshConfigOptions = async () => {
   }
 }
 
-// 跳转到对应管理页面
+// 跳转到对应管理页面（仅 MCP 和子智能体需要跳转，工具和知识库通过选择弹窗管理）
 const navigateToConfigPage = (kind) => {
   if (isReadOnlyConfig.value) return
   // 先关闭选择弹窗
   closeSelectionModal()
-  // 延迟跳转，确保弹窗先关闭
-  setTimeout(() => {
-    switch (kind) {
-      case 'knowledges':
-        router.push({ path: '/extensions', query: { tab: 'knowledge' } })
-        break
-      case 'tools':
-        router.push({ path: '/extensions', query: { tab: 'tools' } })
-        break
-      case 'mcps':
-        router.push({ path: '/extensions', query: { tab: 'mcp' } })
-        break
-      case 'skills':
-        router.push({ path: '/extensions', query: { tab: 'skills' } })
-        break
-      case 'subagents':
-        router.push({ path: '/agent-manage', query: { tab: 'agents' } })
-        break
-    }
-  }, 100)
+  // 通知父组件关闭智能体编辑弹窗后再跳转
+  emit('navigateRequest', kind)
 }
 
 const isDefaultEnabledResourceValue = (value) => value === 'all' || value === undefined

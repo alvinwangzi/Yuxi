@@ -8,7 +8,17 @@
       :loading="activeChildLoading"
       :show-border="true"
       aria-label="技能与连接器视图切换"
-    />
+    >
+      <template #actions>
+        <a
+          v-if="userStore.isAdmin"
+          class="connector-manage-link"
+          @click.prevent="router.push({ path: '/extensions', query: { tab: 'connectors' } })"
+        >
+          业务系统连接器
+        </a>
+      </template>
+    </PageHeader>
 
     <div v-if="!isDetailPage" class="skills-content">
       <div v-if="activeTab === 'skills'" class="tab-panel">
@@ -168,6 +178,19 @@ watch(activeTab, (tab) => {
       min-height: 0;
       overflow-y: auto;
     }
+  }
+}
+
+.connector-manage-link {
+  color: var(--main-color, #6366f1);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    text-decoration: underline;
   }
 }
 </style>

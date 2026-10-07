@@ -10,6 +10,7 @@ STEP_TYPES: dict[str, str] = {
     "approval": "人工审批（暂停等待确认）",
     "script": "Python 脚本执行",
     "output": "格式化输出 + 交付（页面展示/文件/消息推送）",
+    "connector": "调用已配置的第三方业务系统连接器操作",
     "end": "工作流输出出口（汇总最终输出，唯一终点）",
 }
 
