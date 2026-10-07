@@ -207,10 +207,14 @@ async def test_compresses_checkpoint_through_canonical_graph(monkeypatch: pytest
             }
 
     monkeypatch.setattr(service, "create_agent_composite_backend", lambda _context: object())
+
+    async def fake_create_summary_middleware(_context, *, backend):
+        return Compressor()
+
     monkeypatch.setattr(
         service,
         "create_summary_middleware_from_context",
-        lambda _context, *, backend: Compressor(),
+        fake_create_summary_middleware,
     )
 
     result = await service._compress_agent_checkpoint(

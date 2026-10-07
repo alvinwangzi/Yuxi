@@ -8,45 +8,50 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Qu
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
-from yuxi.agents.skills.service import (
-    confirm_personal_skill_install_draft,
-    confirm_skill_install_draft,
-    create_skill_node,
-    delete_skill,
-    delete_skill_node,
-    delete_skills_batch,
-    delete_personal_skill,
+from yuxi.permissions import resolve_skill_permission
+from yuxi.repositories.skill_repository import SkillRepository
+from yuxi.services.skills.catalog import list_accessible_skills, list_skill_cards_for_user
+from yuxi.services.skills.draft import (
+    create_remote_skill_draft,
+    create_uploaded_skill_draft,
     discard_skill_install_draft,
+)
+from yuxi.services.skills.edit import (
+    SkillEditConflict,
+    create_skill_node,
+    delete_skill_node,
+    edit_shared_skill_dependencies,
+    edit_shared_skill_file,
     export_skill_zip,
+    get_skill_tree,
+    read_skill_file,
+)
+from yuxi.services.skills.personal import (
+    confirm_personal_skill_install_draft,
+    delete_personal_skill,
+    read_personal_skill_file,
+)
+from yuxi.services.skills.remote import list_remote_skills, search_remote_skills
+from yuxi.services.skills.shared import (
+    confirm_skill_install_draft,
+    delete_skill,
+    delete_skills_batch,
     get_allowed_skill_access_levels,
     get_manageable_skill_or_raise,
     get_skill_dependency_options,
-    get_skill_tree,
     init_builtin_skills,
     is_builtin_skill,
-    list_accessible_skills,
-    list_skill_cards_for_user,
-    list_skills,
-    list_visible_skills_for_management,
-    prepare_remote_skill_install,
-    prepare_skill_upload,
-    read_personal_skill_file,
-    read_skill_file,
-    update_skill_dependencies,
+    normalize_skill_share_config,
     update_skill_enabled,
-    update_skill_file,
     update_skill_share_config,
     user_can_manage_skill,
 )
-from yuxi.permissions import resolve_skill_permission
-from yuxi.agents.skills.remote_install import list_remote_skills, search_remote_skills
-from yuxi.agents.skills.repository import SkillRepository
 from yuxi.repositories.category_repository import CategoryRepository
 from yuxi.repositories.user_repository import UserRepository
 from yuxi.storage.postgres.models_business import User
 from yuxi.utils.logging_config import logger
+
+from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
 
 skills = APIRouter(prefix="/system/skills", tags=["skills"])
 user_skills = APIRouter(prefix="/skills", tags=["skills"])
@@ -69,12 +74,14 @@ class SkillNodeCreateRequest(BaseModel):
 class SkillFileUpdateRequest(BaseModel):
     path: str = Field(..., description="相对 skill 根目录的路径")
     content: str = Field(..., description="文件内容")
+    expected_revision: str = Field(..., description="读取文件时取得的 SHA-256 修订值")
 
 
 class SkillDependenciesUpdateRequest(BaseModel):
     tool_dependencies: list[str] = Field(default_factory=list, description="依赖的内置工具列表")
     mcp_dependencies: list[str] = Field(default_factory=list, description="依赖的 MCP 服务列表")
     skill_dependencies: list[str] = Field(default_factory=list, description="依赖的其他 skill slug 列表")
+    expected_revision: str = Field(..., description="读取根级 SKILL.md 时取得的修订值")
 
 
 class RemoteSkillSourceRequest(BaseModel):
@@ -188,17 +195,20 @@ async def list_accessible_skills_route(
 
 
 @user_skills.post("/import/prepare")
-async def prepare_skill_upload_route(
+async def create_uploaded_skill_draft_route(
     file: UploadFile = File(...),
     current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
 ):
     try:
-        data = await prepare_skill_upload(
-            db,
+        data = await create_uploaded_skill_draft(
             filename=file.filename or "",
             file_bytes=await file.read(),
             operator=current_user,
+        )
+        allowed = get_allowed_skill_access_levels(current_user)
+        data["allowed_access_levels"] = allowed
+        data["default_share_config"] = normalize_skill_share_config(
+            None, operator_uid=current_user.uid, allowed_access_levels=set(allowed)
         )
         return {"success": True, "data": data}
     except ValueError as e:
@@ -245,14 +255,17 @@ async def search_remote_skills_route(
 async def prepare_remote_skills_route(
     payload: RemoteSkillPrepareRequest,
     current_user: User = Depends(get_required_user),
-    db: AsyncSession = Depends(get_db),
 ):
     try:
-        data = await prepare_remote_skill_install(
-            db,
+        data = await create_remote_skill_draft(
             source=payload.source,
             skills=payload.skills,
             operator=current_user,
+        )
+        allowed = get_allowed_skill_access_levels(current_user)
+        data["allowed_access_levels"] = allowed
+        data["default_share_config"] = normalize_skill_share_config(
+            None, operator_uid=current_user.uid, allowed_access_levels=set(allowed)
         )
         return {"success": True, "data": data}
     except ValueError as e:
@@ -371,7 +384,7 @@ async def list_skills_route(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        items = await list_visible_skills_for_management(db, current_user)
+        items = await SkillRepository(db).list_visible_for_management(current_user)
         author_nickname_map = await _build_author_nickname_map(db, items)
         return {
             "success": True,
@@ -410,7 +423,7 @@ async def list_builtin_skills_route(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        items = [item for item in await list_skills(db) if item.source_type == "builtin"]
+        items = await SkillRepository(db).list_builtin()
         return {"success": True, "data": [item.to_dict() for item in items]}
     except ValueError as e:
         _raise_from_value_error(e)
@@ -558,7 +571,6 @@ async def create_skill_file_route(
             relative_path=payload.path,
             is_dir=payload.is_dir,
             content=payload.content,
-            updated_by=current_user.uid,
             operator=current_user,
         )
         return {"success": True}
@@ -579,15 +591,17 @@ async def update_skill_file_route(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await update_skill_file(
+        item, revision = await edit_shared_skill_file(
             db,
             slug=slug,
             relative_path=payload.path,
             content=payload.content,
-            updated_by=current_user.uid,
+            expected_revision=payload.expected_revision,
             operator=current_user,
         )
-        return {"success": True}
+        return {"success": True, "data": {"skill": _serialize_skill_for_user(item, current_user), "revision": revision}}
+    except SkillEditConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         _raise_from_value_error(e)
     except HTTPException:
@@ -605,15 +619,18 @@ async def update_skill_dependencies_route(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        item = await update_skill_dependencies(
+        item, revision = await edit_shared_skill_dependencies(
             db,
             slug=slug,
             tool_dependencies=payload.tool_dependencies,
             mcp_dependencies=payload.mcp_dependencies,
             skill_dependencies=payload.skill_dependencies,
+            expected_revision=payload.expected_revision,
             operator=current_user,
         )
-        return {"success": True, "data": _serialize_skill_for_user(item, current_user)}
+        return {"success": True, "data": {"skill": _serialize_skill_for_user(item, current_user), "revision": revision}}
+    except SkillEditConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         _raise_from_value_error(e)
     except HTTPException:

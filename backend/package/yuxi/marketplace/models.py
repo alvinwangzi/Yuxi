@@ -1,7 +1,7 @@
 """技能市场数据模型"""
 from typing import Any
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index, UniqueConstraint
+    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Index, UniqueConstraint, JSON
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from yuxi.storage.postgres.models_business import Base
@@ -62,7 +62,7 @@ class SkillMarketVersion(Base):
     entry_id = Column(Integer, ForeignKey("skill_market_entries.id"), nullable=False, index=True)
     version = Column(String(32), nullable=False, comment="语义化版本号")
     release_notes = Column(Text, nullable=True, comment="发布说明")
-    content_snapshot = Column(JSONB, nullable=False, comment="冻结的技能包内容")
+    content_snapshot = Column(JSONB().with_variant(JSON, "sqlite"), nullable=False, comment="冻结的技能包内容")
     change_type = Column(String(16), nullable=False, comment="变更类型: major | minor | patch")
     submitted_by = Column(String(64), nullable=False, comment="提交者")
     submitted_at = Column(DateTime, default=utc_now_naive)
@@ -105,7 +105,7 @@ class SkillMarketSubmission(Base):
     reviewed_at = Column(DateTime, nullable=True)
     # 安全扫描字段
     scan_score = Column(Integer, nullable=True, comment="风险评分 0-100")
-    scan_findings = Column(JSONB, nullable=True, comment="扫描发现详情")
+    scan_findings = Column(JSONB().with_variant(JSON, "sqlite"), nullable=True, comment="扫描发现详情")
     scanned_at = Column(DateTime, nullable=True, comment="扫描时间")
 
     def to_dict(self) -> dict[str, Any]:

@@ -392,13 +392,13 @@ def _validate_user_uid_header(provider_type: str, include_user_uid: bool) -> Non
 async def create_provider_config(db: AsyncSession, data: dict[str, Any], username: str) -> ModelProvider:
     """创建独立模型供应商配置。"""
     payload = _normalize_payload(data)
+    _validate_user_uid_header(payload["provider_type"], payload["include_user_uid"])
     if await get_model_provider(db, payload["provider_id"]):
         raise ValueError(f"供应商 {payload['provider_id']} 已存在")
     # 同 id 的内置墓碑行占用唯一键，重建前先物理清除。
     tombstone = await get_model_provider_with_tombstone(db, payload["provider_id"])
     if tombstone:
         await purge_model_provider(db, tombstone)
-    _validate_user_uid_header(payload["provider_type"], payload["include_user_uid"])
     payload["created_by"] = username
     payload["updated_by"] = username
     return await create_model_provider(db, payload)

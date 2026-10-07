@@ -152,7 +152,7 @@ services:
     command: watchfiles --filter python "python -m server.worker_main" /app/server /app/package
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "uv run --no-sync --no-dev arq --check server.worker_main.WorkerSettings"]
+      test: ["CMD", "python", "-m", "yuxi.services.worker_health"]
       interval: 10s
       timeout: 10s
       retries: 6
@@ -355,7 +355,10 @@ services:
     restart: unless-stopped
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2023-03-20T20-16-18Z
+    build:
+      context: ./docker/minio
+      dockerfile: Dockerfile
+    image: ${COMPOSE_PROJECT_NAME:-yuxi}-minio:RELEASE.2023-03-20T20-16-18Z
     environment:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}

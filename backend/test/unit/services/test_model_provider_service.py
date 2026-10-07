@@ -194,7 +194,12 @@ async def test_provider_uid_header_save_passes_when_signature_secret_present(mon
         writes["update"] = data
         return SimpleNamespace(include_user_uid=True)
 
+    async def no_tombstone(db, provider_id):
+        del db, provider_id
+        return None
+
     monkeypatch.setattr("yuxi.models.providers.service.get_model_provider", missing_provider)
+    monkeypatch.setattr("yuxi.models.providers.service.get_model_provider_with_tombstone", no_tombstone)
     monkeypatch.setattr("yuxi.models.providers.service.create_model_provider", fake_create_model_provider)
 
     await create_provider_config(
