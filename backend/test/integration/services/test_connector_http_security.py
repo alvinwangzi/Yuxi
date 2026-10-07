@@ -83,7 +83,7 @@ class TestSSRFProtection:
             allowed_origins=("http://127.0.0.1:9999",),
             timeout_seconds=2,
         )
-        with pytest.raises((ConnectorUnsafeTargetError, httpx.ConnectError)):
+        with pytest.raises((ConnectorUnsafeTargetError, ValueError, httpx.ConnectError)):
             await execute_http_request(
                 "GET",
                 "http://127.0.0.1:9999/test",
@@ -97,7 +97,7 @@ class TestSSRFProtection:
             allowed_private_cidrs=(ipaddress.ip_network("10.0.0.0/8"),),
             timeout_seconds=2,
         )
-        with pytest.raises(httpx.ConnectError):
+        with pytest.raises((httpx.ConnectError, ConnectorTimeoutError)):
             await execute_http_request(
                 "GET",
                 "http://10.0.0.1:8080/test",

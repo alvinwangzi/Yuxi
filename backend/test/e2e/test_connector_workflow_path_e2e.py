@@ -14,7 +14,7 @@ import uuid
 import httpx
 import pytest
 
-from e2e_helpers import E2E_TIMEOUT, postgres_dsn
+from e2e_helpers import postgres_dsn
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.e2e, pytest.mark.slow, pytest.mark.timeout(300)]
 

@@ -166,7 +166,7 @@ class TestGetConnectorTools:
         }
 
         with patch(
-            "yuxi.agents.connectors.tools.get_connector_service"
+            "yuxi.services.connectors.factory.get_connector_service"
         ) as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
@@ -194,7 +194,7 @@ class TestGetConnectorTools:
         }
 
         with patch(
-            "yuxi.agents.connectors.tools.get_connector_service"
+            "yuxi.services.connectors.factory.get_connector_service"
         ) as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
@@ -208,7 +208,7 @@ class TestGetConnectorTools:
         context = SimpleNamespace(connectors=["missing"], uid="user-1")
 
         with patch(
-            "yuxi.agents.connectors.tools.get_connector_service"
+            "yuxi.services.connectors.factory.get_connector_service"
         ) as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=None)
@@ -222,7 +222,7 @@ class TestGetConnectorTools:
         context = SimpleNamespace(connectors=["broken"], uid="user-1")
 
         with patch(
-            "yuxi.agents.connectors.tools.get_connector_service"
+            "yuxi.services.connectors.factory.get_connector_service"
         ) as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(
@@ -250,7 +250,7 @@ class TestGetConnectorTools:
         }
 
         with patch(
-            "yuxi.agents.connectors.tools.get_connector_service"
+            "yuxi.services.connectors.factory.get_connector_service"
         ) as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
@@ -278,7 +278,7 @@ class TestGetConnectorTools:
         }
 
         with patch(
-            "yuxi.agents.connectors.tools.get_connector_service"
+            "yuxi.services.connectors.factory.get_connector_service"
         ) as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)

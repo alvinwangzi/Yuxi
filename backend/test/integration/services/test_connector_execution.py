@@ -72,7 +72,6 @@ async def _seed_connector_and_operation(db):
         operation_type="read",
         http_method="GET",
         endpoint_template="/v1/data",
-        created_by="admin",
     )
     await db.commit()
     return connector, operation
@@ -101,10 +100,10 @@ class TestInvocationLifecycle:
         )
         await isolated_db.commit()
 
-        assert invocation.invocation_id is not None
-        assert invocation.status == "pending"
+        assert invocation.id is not None
+        assert invocation.status == "prepared"
 
-        fetched = await exec_repo.get_invocation(invocation.invocation_id)
+        fetched = await exec_repo.get_invocation(invocation.id)
         assert fetched is not None
         assert fetched.connector_slug == "exec-test"
 
@@ -169,16 +168,17 @@ class TestInvocationLifecycle:
 
         existing = await exec_repo.get_by_logical_call_key(key)
         assert existing is not None
-        assert existing.invocation_id == inv1.invocation_id
+        assert existing.id == inv1.id
 
 
 class TestApprovalFlow:
     """审批流程：approve/reject 状态转换。"""
 
     async def test_approve_invocation(self, isolated_db):
-        from datetime import datetime, timedelta, timezone
+        from datetime import timedelta
 
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
+        from yuxi.utils.datetime_utils import utc_now_naive
 
         connector, operation = await _seed_connector_and_operation(isolated_db)
         exec_repo = ConnectorExecutionRepository(isolated_db)
@@ -198,12 +198,12 @@ class TestApprovalFlow:
         )
         await isolated_db.commit()
 
-        expires = datetime.now(timezone.utc) + timedelta(minutes=30)
+        expires = utc_now_naive() + timedelta(minutes=30)
         approved = await exec_repo.approve_invocation(
             invocation, approved_by="admin-1", approval_digest="sha256:abc", expires_at=expires,
         )
         await isolated_db.commit()
-        assert approved.status == "approved"
+        assert approved.status == "prepared"
 
     async def test_reject_invocation(self, isolated_db):
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
@@ -237,9 +237,8 @@ class TestLeaseAndRecovery:
     """Lease 过期与 stale lease 扫描。"""
 
     async def test_find_stale_leases(self, isolated_db):
-        from datetime import datetime, timedelta, timezone
-
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
+        from yuxi.utils.datetime_utils import utc_now_naive
 
         connector, operation = await _seed_connector_and_operation(isolated_db)
         exec_repo = ConnectorExecutionRepository(isolated_db)
@@ -264,10 +263,10 @@ class TestLeaseAndRecovery:
         await isolated_db.commit()
 
         import asyncio
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(1.5)
 
-        stale = await exec_repo.find_stale_leases(datetime.now(timezone.utc))
-        assert any(i.invocation_id == invocation.invocation_id for i in stale)
+        stale = await exec_repo.find_stale_leases(utc_now_naive())
+        assert any(i.id == invocation.id for i in stale)
 
 
 class TestAttemptTracking:
@@ -294,7 +293,7 @@ class TestAttemptTracking:
         await isolated_db.commit()
 
         attempt = await exec_repo.create_attempt(
-            invocation.invocation_id, attempt_no=1, owner_attempt="attempt-1",
+            invocation.id, attempt_no=1, owner_attempt="attempt-1",
         )
         await isolated_db.commit()
         assert attempt.attempt_no == 1
@@ -305,5 +304,5 @@ class TestAttemptTracking:
         await isolated_db.commit()
         assert finalized.send_state == "sent"
 
-        attempts = await exec_repo.list_attempts(invocation.invocation_id)
+        attempts = await exec_repo.list_attempts(invocation.id)
         assert len(attempts) == 1

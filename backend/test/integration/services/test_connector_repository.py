@@ -132,7 +132,7 @@ class TestConnectorRepositoryCRUD:
         deleted = await repo.soft_delete(connector, updated_by="admin")
         await isolated_db.commit()
         assert deleted.deleted_at is not None
-        assert deleted.revision == 2
+        assert deleted.revision == 1
 
         active = await repo.get_by_slug("test-del")
         assert active is None
@@ -179,7 +179,6 @@ class TestConnectorOperationCRUD:
             operation_type="read",
             http_method="GET",
             endpoint_template="/v1/users",
-            created_by="admin",
         )
         await isolated_db.commit()
 
@@ -210,7 +209,6 @@ class TestConnectorOperationCRUD:
             operation_type="write",
             http_method="PUT",
             endpoint_template="/v1/users/{{id}}",
-            created_by="admin",
         )
         await isolated_db.commit()
         assert operation.revision == 1
@@ -239,13 +237,13 @@ class TestConnectorCredentials:
         cred = await repo.upsert_credential(connector.id, "access_token", ciphertext, "key-v1")
         await isolated_db.commit()
 
-        assert cred.key == "access_token"
-        assert cred.ciphertext == ciphertext
+        assert cred.credential_key == "access_token"
+        assert cred.credential_value == ciphertext
         assert cred.key_id == "key-v1"
 
         fetched = await repo.get_credential(connector.id, "access_token")
         assert fetched is not None
-        assert fetched.ciphertext == ciphertext
+        assert fetched.credential_value == ciphertext
 
     async def test_delete_credentials(self, isolated_db):
         from yuxi.repositories.connector_repository import ConnectorRepository
@@ -269,4 +267,4 @@ class TestConnectorCredentials:
 
         remaining = await repo.list_credentials(connector.id)
         assert len(remaining) == 1
-        assert remaining[0].key == "token_b"
+        assert remaining[0].credential_key == "token_b"

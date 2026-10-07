@@ -1730,9 +1730,6 @@ class Connector(Base):
     """第三方业务系统连接器配置。"""
 
     __tablename__ = "connectors"
-    __table_args__ = (
-        CheckConstraint("enabled IN (0, 1)", name="ck_connectors_enabled_bool"),
-    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     slug = Column(String(80), nullable=False, unique=True, comment="唯一标识，创建后不可变")
