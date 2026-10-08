@@ -16,6 +16,7 @@ from yuxi.storage.postgres.models_business import (
     Message,
     SubagentThread,
     ToolCall,
+    WorkflowRun,
 )
 from yuxi.utils.datetime_utils import utc_now_naive
 
@@ -417,6 +418,24 @@ class AgentRunRepository:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds 必须大于 0")
 
+        preview = await self.get_run(run_id)
+        if preview is not None and preview.source == "workflow":
+            parent_id = (preview.origin_metadata or {}).get("workflow_run_id")
+            if type(parent_id) is not int:
+                return preview, False
+            parent = await self.db.scalar(
+                select(WorkflowRun)
+                .where(
+                    WorkflowRun.id == parent_id,
+                    WorkflowRun.created_by == preview.uid,
+                    WorkflowRun.status.in_(("running", "waiting_agent", "waiting_approval")),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if parent is None:
+                return preview, False
+
         run = await self._lock_run(run_id)
         if not run:
             return None, False
@@ -645,12 +664,13 @@ class AgentRunRepository:
         run_id: str,
         uid: str,
         cascade_descendants: bool,
+        close_interrupted: bool = False,
     ) -> tuple[AgentRun | None, list[str]]:
         """按 root 到 descendants 的固定锁顺序取消一棵执行树。"""
         run = await self.lock_run_for_user(run_id, str(uid))
         if run is None:
             return None, []
-        await self._request_cancel_locked(run)
+        await self._request_cancel_locked(run, close_interrupted=close_interrupted)
         cancelled_ids = [run.id]
         if cascade_descendants:
             cancelled_ids.extend(
@@ -658,8 +678,16 @@ class AgentRunRepository:
             )
         return run, cancelled_ids
 
-    async def _request_cancel_locked(self, run: AgentRun) -> None:
+    async def _request_cancel_locked(self, run: AgentRun, *, close_interrupted: bool = False) -> None:
         """转换一条已由当前事务锁定的 Run。"""
+        if run.status == "interrupted" and close_interrupted:
+            run.status = "cancelled"
+            run.error_type = "cancelled"
+            run.error_message = "所属工作流已终止"
+            run.updated_at = utc_now_naive()
+            await self._project_input_delivery_status(run)
+            await self.db.flush()
+            return
         if run.status in TERMINAL_RUN_STATUSES:
             return
         current_time = utc_now_naive()

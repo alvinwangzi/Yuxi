@@ -72,6 +72,7 @@ export const getToolApprovalSummary = (request) => {
 
 export const hasPendingInterruptPayload = (pendingInterrupt) => {
   if (!pendingInterrupt) return false
+  if (pendingInterrupt.kind === 'connector') return Boolean(pendingInterrupt.invocationId && pendingInterrupt.digest)
   if (pendingInterrupt.kind === 'tool_approval') {
     return (
       Array.isArray(pendingInterrupt.actionRequests) && pendingInterrupt.actionRequests.length > 0

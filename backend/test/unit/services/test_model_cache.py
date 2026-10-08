@@ -95,6 +95,21 @@ def test_model_cache_loads_from_redis_and_uses_local_ttl(monkeypatch: pytest.Mon
     assert redis.get_calls == 1
 
 
+def test_newly_committed_model_is_visible_when_worker_local_cache_misses(monkeypatch):
+    """worker 旧快照中的 miss 必须核对共享缓存，不能误拒绝新建模型。"""
+    redis = _FakeRedis()
+    _patch_redis(monkeypatch, redis)
+    original = ModelInfo(provider_id="original", model_id="chat", model_type="chat", display_name="Original",
+                         api_key="test-only", base_url="https://example.com", provider_type="openai")
+    created = ModelInfo(provider_id="created", model_id="chat", model_type="chat", display_name="Created",
+                        api_key="test-only", base_url="https://example.com", provider_type="openai")
+    redis.data[REDIS_CACHE_KEY] = json.dumps({original.spec: original.to_dict()})
+    cache = ModelCache()
+    assert cache.get_model_info(original.spec) == original
+    redis.data[REDIS_CACHE_KEY] = json.dumps({original.spec: original.to_dict(), created.spec: created.to_dict()})
+    assert cache.get_model_info(created.spec) == created
+
+
 def test_model_cache_save_writes_redis_json(monkeypatch: pytest.MonkeyPatch):
     redis = _FakeRedis()
     _patch_redis(monkeypatch, redis)

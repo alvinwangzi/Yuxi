@@ -6,6 +6,11 @@ import os
 import uuid
 
 import pytest
+from test.integration.isolated_postgres_fixtures import (
+    cleanup_test_knowledge_resources as cleanup_test_knowledge_resources,
+    cleanup_test_sandboxes as cleanup_test_sandboxes,
+    ensure_live_api_schema as ensure_live_api_schema,
+)
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [
@@ -136,14 +141,14 @@ class TestInvocationLifecycle:
         finalized = await exec_repo.finalize_invocation(
             invocation,
             owner_attempt="attempt-1",
-            status="success",
-            remote_outcome="success",
+            status="succeeded",
+            remote_outcome="succeeded",
             response_status=200,
             duration_ms=150,
         )
         await isolated_db.commit()
-        assert finalized.status == "success"
-        assert finalized.remote_outcome == "success"
+        assert finalized.status == "succeeded"
+        assert finalized.remote_outcome == "succeeded"
 
     async def test_dedup_by_logical_call_key(self, isolated_db):
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
@@ -178,7 +183,7 @@ class TestApprovalFlow:
         from datetime import timedelta
 
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
-        from yuxi.utils.datetime_utils import utc_now_naive
+        from yuxi.utils.datetime_utils import utc_now
 
         connector, operation = await _seed_connector_and_operation(isolated_db)
         exec_repo = ConnectorExecutionRepository(isolated_db)
@@ -198,7 +203,7 @@ class TestApprovalFlow:
         )
         await isolated_db.commit()
 
-        expires = utc_now_naive() + timedelta(minutes=30)
+        expires = utc_now() + timedelta(minutes=30)
         approved = await exec_repo.approve_invocation(
             invocation, approved_by="admin-1", approval_digest="sha256:abc", expires_at=expires,
         )
@@ -238,7 +243,7 @@ class TestLeaseAndRecovery:
 
     async def test_find_stale_leases(self, isolated_db):
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
-        from yuxi.utils.datetime_utils import utc_now_naive
+        from yuxi.utils.datetime_utils import utc_now
 
         connector, operation = await _seed_connector_and_operation(isolated_db)
         exec_repo = ConnectorExecutionRepository(isolated_db)
@@ -265,7 +270,7 @@ class TestLeaseAndRecovery:
         import asyncio
         await asyncio.sleep(1.5)
 
-        stale = await exec_repo.find_stale_leases(utc_now_naive())
+        stale = await exec_repo.find_stale_leases(utc_now())
         assert any(i.id == invocation.id for i in stale)
 
 

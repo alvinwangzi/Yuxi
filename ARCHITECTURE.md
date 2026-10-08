@@ -93,6 +93,16 @@ Yuxi 只交付完整知识能力路径。API 始终注册 `external_kb`、`knowl
 
 审批或人机输入产生的 resume 请求会从 LangGraph checkpoint 恢复，并创建新的 AgentRun；它不重新进入普通消息 FIFO 接入流程。
 
+### 连接器与工作流等待
+
+连接器的管理和执行用例由 `services/connectors/service.py` 拥有；repository 保存配置、凭据密文、调用与 attempt。内置适配器通过 API、worker 和 factory 显式注册，只消费已批准的冻结快照。执行事务先锁当前 actor 与所属 WorkflowRun/AgentRun，再锁连接器、操作和 invocation；claim 提交是取消、撤权与发送的边界。HTTP 不持有数据库事务，结果由 owner_attempt CAS 收敛；在途写失联保留 unknown，需要独立回查或受授权核对。
+
+Agent 连接器工具从 ToolRuntime 获得身份与真实 tool_call_id，prepare 提交后才 interrupt，正式 resume 复用 invocation 和 checkpoint。子 Agent 默认不装配需要父级审批转交的 required write，执行入口也拒绝该路径。工作流在 PostgreSQL 保存 definition、激活标识、层游标、输出和待项，waiting_agent/waiting_approval 释放 worker 槽位；恢复通过持久 generation 与 dispatch_pending 投递，循环的新激活才产生新调用。`workflow_agent_service` 将 agent_slug 节点交给正式 Request/FIFO/Run 链路，只从绑定 Run.output_message_id 读取结果；model_spec 节点保留轻量模型路径。 失败或取消的父运行持久保存子取消重试意图；恢复扫描会关闭等待/排队的子请求，并保留父失败原因。正式子 resume 和 worker claim 先锁父工作流并检查活跃归属，终态父不能被后续队列或人工恢复复活。
+
+连接器的 total timeout 覆盖完整响应及同一 invocation 的所有认证、预检与重试，不按尝试重置。原始流在解压分配前限制输出；已结束 dispatch 不再保留含凭据的执行快照。审批 UI 只展示 schema 明确公开的冻结目标/变更，摘要不完整时后端也拒绝批准。启用状态要求完整认证配对，配置草稿与可运行消费分开。
+
+飞书表/字段发现是管理员配置用例，短事务取出当前配置和 Vault 凭据后才执行有界只读 HTTP；普通用户不能借该入口访问资源。字段 ID/type 保存后拥有标准输入 schema，运行时再以实际字段目录拒绝错误格式。Salesforce 外部键字段由配置拥有。审批、取消及核对提交后的工作流通知由 `connectors/consumer_service.py` 编排，失败由持久恢复扫描补投递，HTTP router 不维护生命周期。
+
 ## 架构不变量
 
 - Docker Compose 是开发环境的事实来源。开发时先检查容器、日志和热重载，不默认要求本地裸跑服务。

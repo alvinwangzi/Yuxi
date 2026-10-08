@@ -126,8 +126,12 @@ class ModelCache:
         self._local_cache_at = 0.0
 
     def get_model_info(self, spec: str) -> ModelInfo | None:
+        """本地命中复用 TTL；miss 再核对共享快照以接收刚提交的新模型。"""
         cache = self._load_cache()
-        return cache.get(spec)
+        if info := cache.get(spec):
+            return info
+        self._invalidate_local()
+        return self._load_cache().get(spec)
 
     def get_all_specs(self, model_type: str | None = None) -> list[ModelInfo]:
         cache = self._load_cache()

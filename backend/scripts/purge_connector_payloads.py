@@ -18,7 +18,7 @@ from datetime import timedelta
 
 from yuxi.storage.postgres.models_business import ConnectorUsageLog
 from yuxi.utils import logger
-from yuxi.utils.datetime_utils import utc_now_naive
+from yuxi.utils.datetime_utils import utc_now
 
 BATCH_SIZE = 100
 DEFAULT_OLDER_THAN_DAYS = 90
@@ -36,7 +36,9 @@ async def purge_payloads(
     """清理已终态且超过保留期的调用加密 payload。"""
     from sqlalchemy import select
 
-    cutoff = utc_now_naive() - older_than
+    if not 1 <= batch_size <= 1000 or older_than <= timedelta(0):
+        raise ValueError("清理批量和保留期必须为正数且批量不超过1000")
+    cutoff = utc_now() - older_than
     offset = 0
     purged = 0
 
@@ -54,6 +56,7 @@ async def purge_payloads(
                 | (ConnectorUsageLog.result_ciphertext.isnot(None))
             )
             .limit(batch_size)
+            .order_by(ConnectorUsageLog.id)
             .offset(offset)
         )
         result = await session.execute(stmt)
@@ -75,7 +78,9 @@ async def purge_payloads(
         if not dry_run:
             await session.flush()
 
-        offset += batch_size
+        # 执行模式会缩小过滤集，下一页仍从头读取；dry-run 才前进游标。
+        if dry_run:
+            offset += batch_size
 
     return purged
 

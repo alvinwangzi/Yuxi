@@ -545,22 +545,26 @@
                 <!-- Connector 步骤特有字段 -->
                 <template v-if="selectedStep.type === 'connector'">
                   <a-form-item label="连接器" required>
-                    <a-input
-                      v-model:value="selectedStep.connector_slug"
-                      placeholder="连接器标识 (connector_slug)"
-                      @change="markDirty"
-                    />
+                    <a-select v-model:value="selectedStep.connector_slug" placeholder="选择有权使用的连接器" @change="onConnectorChanged">
+                      <a-select-option v-for="connector in connectorOptions" :key="connector.slug" :value="connector.slug">{{ connector.name }}</a-select-option>
+                    </a-select>
                   </a-form-item>
                   <a-form-item label="操作" required>
-                    <a-input
-                      v-model:value="selectedStep.operation_slug"
-                      placeholder="操作标识 (operation_slug)"
-                      @change="markDirty"
-                    />
+                    <a-select v-model:value="selectedStep.operation_slug" placeholder="选择有权执行的操作" @change="markDirty">
+                      <a-select-option v-for="operation in connectorOperations" :key="operation.slug" :value="operation.slug">{{ operation.name }}（{{ operation.operation_type === 'write' ? '写入' : '读取' }}）</a-select-option>
+                    </a-select>
                   </a-form-item>
+                  <template v-if="selectedConnectorOperation">
+                    <a-alert v-if="selectedConnectorOperation.operation_type === 'write'" type="warning" :message="selectedConnectorOperation.approval_policy === 'required' ? '该写操作每次需要调用者审批，等待期间释放执行槽位' : '该写操作已预授权，执行前仍验证当前写入范围'" />
+                    <div v-for="(schema, name) in selectedConnectorOperation.request_schema?.properties || {}" :key="name">
+                      {{ name }}：{{ schema.type || (schema.anyOf ? '联合类型' : 'JSON') }}
+                      {{ selectedConnectorOperation.request_schema?.required?.includes(name) ? '（必填）' : '（可选）' }}
+                    </div>
+                    <a-form-item label="参数示例（须按当前业务填写）"><pre class="connector-contract-example">{{ JSON.stringify(connectorParameterExample, null, 2) }}</pre></a-form-item>
+                  </template>
                   <a-form-item label="调用参数 (JSON)">
                     <a-textarea
-                      v-model:value="selectedStep._params_json"
+                      v-model:value="connectorParamsText"
                       :rows="4"
                       placeholder='{"key": "{{变量名}}"}'
                       @change="markDirty"
@@ -727,7 +731,7 @@
             </a-tag>
             <span class="run-history-time">{{ formatRunTime(run.created_at) }}</span>
             <a-button
-              v-if="run.status === 'pending' || run.status === 'running'"
+              v-if="['pending', 'running', 'waiting_agent', 'waiting_approval'].includes(run.status)"
               size="small"
               danger
               @click.stop="handleCancelRun(run.id)"
@@ -751,17 +755,19 @@
       wrap-class-name="run-result-modal"
       @cancel="onRunResultClose"
     >
+      <a-alert v-if="runReadError" type="warning" :message="runReadError" show-icon />
       <div v-if="runResultData">
+        <a-button v-if="pendingInvocationIds.length" @click="workflowApprovalOpen = true">查看待处理调用</a-button>
         <div class="run-result-status">
           <a-tag :color="runResultData.status === 'completed' ? 'green' : runResultData.status === 'failed' ? 'red' : 'blue'">
-            {{ runResultData.status === 'running' ? '执行中...' : runResultData.status === 'completed' ? '已完成' : runResultData.status === 'failed' ? '已失败' : runResultData.status }}
+            {{ workflowStatusLabels[runResultData.status] || runResultData.status }}
           </a-tag>
           <span v-if="runResultData.status === 'running' && runResultData.step_runs" class="run-result-progress">
             步骤 {{ completedStepCount }}/{{ runResultData.step_runs.length }}
           </span>
           <span v-if="runResultData.error_message" class="run-result-error-msg">{{ runResultData.error_message }}</span>
           <a-button
-            v-if="runResultData.status === 'pending' || runResultData.status === 'running'"
+            v-if="['pending', 'running', 'waiting_agent', 'waiting_approval'].includes(runResultData.status)"
             size="small"
             danger
             :loading="cancellingRun"
@@ -900,6 +906,7 @@
         </ul>
       </div>
     </a-modal>
+    <ConnectorApprovalPanel v-model:open="workflowApprovalOpen" :invocation-ids="pendingInvocationIds" />
   </div>
 </template>
 
@@ -918,6 +925,9 @@ import WorkflowNode from '@/components/workflow/WorkflowNode.vue'
 import WorkflowEdge from '@/components/workflow/WorkflowEdge.vue'
 import MarkdownPreview from '@/components/common/MarkdownPreview.vue'
 import { workflowApi } from '@/apis/workflow_api'
+import { prepareWorkflowDefinition } from '@/utils/connector_forms'
+import ConnectorApprovalPanel from '@/components/extensions/ConnectorApprovalPanel.vue'
+import { getUserConnectors, getUserOperations } from '@/apis/connector_api'
 import { agentApi } from '@/apis/agent_api'
 
 import '@vue-flow/core/dist/style.css'
@@ -963,6 +973,7 @@ const showRunResult = ref(false)
 const runResultLoading = ref(true)
 const runResultData = ref(null)
 let runPollTimer = null
+let runPollGeneration = 0
 const showRunHistory = ref(false)
 const runHistoryLoading = ref(false)
 const runHistoryList = ref([])
@@ -1156,6 +1167,42 @@ const businessNodeCount = computed(() => flowNodes.value.filter(n => !isBoundary
 const selectedStep = computed(() => {
   if (!selectedStepId.value) return null
   return steps.value.find(s => s.id === selectedStepId.value)
+})
+
+const connectorOptions = ref([])
+const connectorOperations = ref([])
+const selectedConnectorOperation = computed(() => connectorOperations.value.find(operation => operation.slug === selectedStep.value?.operation_slug))
+const connectorParameterExample = computed(() => Object.fromEntries(Object.entries(selectedConnectorOperation.value?.request_schema?.properties || {}).map(([name, schema]) => {
+  const type = Array.isArray(schema.type) ? schema.type[0] : schema.type
+  const value = schema.enum?.[0] ?? ({ string: `<${name}>`, integer: 0, number: 0, boolean: false, array: [], object: {} }[type] ?? {})
+  return [name, value]
+})))
+const workflowApprovalOpen = ref(false)
+const runReadError = ref('')
+const workflowStatusLabels = { pending: '排队中', running: '执行中', waiting_agent: '等待 Agent', waiting_approval: '等待审批或核对', completed: '已完成', failed: '已失败', cancelled: '已取消' }
+const pendingInvocationIds = computed(() => [...new Set(Object.values(runResultData.value?.resume_state?.pending || {})
+  .flatMap(item => item.invocation_ids || (item.invocation_id ? [item.invocation_id] : [])))])
+const connectorParamsText = computed({
+  get: () => selectedStep.value?._params_json ?? JSON.stringify(selectedStep.value?.params || {}, null, 2),
+  set: value => { if (selectedStep.value) { selectedStep.value._params_json = value; markDirty() } }
+})
+function onConnectorChanged() {
+  selectedStep.value.operation_slug = ''
+  selectedStep.value.params = {}
+  selectedStep.value._params_json = '{}'
+  markDirty()
+}
+watch(() => selectedStep.value?.connector_slug, async slug => {
+  connectorOperations.value = []
+  if (!slug || selectedStep.value?.type !== 'connector') return
+  try {
+    const result = await getUserOperations(slug)
+    if (selectedStep.value?.connector_slug === slug) connectorOperations.value = result.data
+  } catch (error) { message.error(error.message || '读取可执行操作失败') }
+})
+onMounted(async () => {
+  try { connectorOptions.value = (await getUserConnectors()).data }
+  catch (error) { message.error(error.message || '读取可用连接器失败') }
 })
 
 // 递归追溯当前节点的所有上游步骤（沿 depends_on 链路）
@@ -1765,15 +1812,14 @@ const saveWorkflow = async () => {
   syncVariablesToStartNode()
   saving.value = true
   try {
-    await workflowApi.update(workflow.value.id, {
-      name: workflow.value.name,
-      definition: workflow.value.definition
-    })
+    const definition = prepareWorkflowDefinition(workflow.value.definition)
+    await workflowApi.update(workflow.value.id, { name: workflow.value.name, definition })
+    workflow.value.definition = definition
     message.success('保存成功')
     isDirty.value = false
   } catch (error) {
     console.error('保存失败:', error)
-    message.error('保存失败')
+    message.error(error.message || '保存失败')
   } finally {
     saving.value = false
   }
@@ -1906,11 +1952,13 @@ const handleRun = async () => {
 
 const pollRunResult = async (runId) => {
   if (runPollTimer) clearInterval(runPollTimer)
+  const generation = ++runPollGeneration
 
   // 立即执行一次查询，避免首次显示全部"等待中"
   const fetchRun = async () => {
     try {
       const res = await workflowApi.getRun(runId)
+      if (generation !== runPollGeneration) return
       const data = res.data || res
       runResultData.value = data
       if (runResultLoading.value) {
@@ -1919,26 +1967,29 @@ const pollRunResult = async (runId) => {
       if (data.status === 'running') {
         scrollToActiveStep()
       }
-      if (data.status === 'completed' || data.status === 'failed') {
+      runReadError.value = ''
+      if (['completed', 'failed', 'cancelled'].includes(data.status)) {
         clearInterval(runPollTimer)
         runPollTimer = null
       }
     } catch (e) {
+      if (generation !== runPollGeneration) return
       console.error('查询运行结果失败:', e)
-      clearInterval(runPollTimer)
-      runPollTimer = null
+      runReadError.value = '暂时无法获取运行状态，正在自动重试'
       runResultLoading.value = false
     }
   }
 
   // 立即查询一次
   await fetchRun()
+  if (generation !== runPollGeneration) return
   // 然后每 2 秒轮询
-  runPollTimer = setInterval(fetchRun, 2000)
+  if (!['completed', 'failed', 'cancelled'].includes(runResultData.value?.status)) runPollTimer = setInterval(fetchRun, 2000)
 }
 
 /** 关闭运行结果弹窗时清理轮询定时器（不影响后端异步执行） */
 function onRunResultClose() {
+  runPollGeneration++
   if (runPollTimer) {
     clearInterval(runPollTimer)
     runPollTimer = null
@@ -1950,7 +2001,7 @@ function onRunResultClose() {
 async function handleCancelRun(runId) {
   Modal.confirm({
     title: '确认强制关闭',
-    content: '确定要强制终止这个工作流运行吗？未完成的步骤将被标记为失败。',
+    content: '确定要强制终止这个工作流运行吗？未完成步骤将取消，关联的 Agent 请求也会收到取消。远端在途写结果需单独核对。',
     okText: '确认关闭',
     okType: 'danger',
     cancelText: '取消',
@@ -2039,16 +2090,8 @@ const viewRunDetail = async (run) => {
   showRunHistory.value = false
   showRunResult.value = true
   runResultLoading.value = true
-  runResultData.value = null
-  try {
-    const res = await workflowApi.getRun(run.id)
-    runResultData.value = res.data || res
-    runResultLoading.value = false
-  } catch (e) {
-    console.error('加载运行详情失败:', e)
-    message.error('加载运行详情失败')
-    runResultLoading.value = false
-  }
+  runResultData.value = run
+  await pollRunResult(run.id)
 }
 
 function formatRunTime(timeStr) {

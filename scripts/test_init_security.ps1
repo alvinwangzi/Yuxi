@@ -55,3 +55,35 @@ Assert-SecurityValidation "trailing whitespace" (New-SecurityEnv $validJwt $vali
 Assert-SecurityValidation "quoted short value" (New-SecurityEnv '"123456789012345678901234567890"' $validApi $validSandbox) $false
 
 Write-Host "PowerShell security environment validation matrix passed."
+
+# 初始化、幂等与不完整绑定均操作本例临时环境，输出不得包含密钥。
+$connectorCase = Join-Path ([IO.Path]::GetTempPath()) ("yuxi-connector-init-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $connectorCase | Out-Null
+try {
+    $envFile = Join-Path $connectorCase ".env"
+    Set-Content -LiteralPath $envFile -Value "CREDENTIAL_ENCRYPTION_KEY=`nCREDENTIAL_ENCRYPTION_KEY_ID=" -Encoding utf8NoBOM
+    Push-Location $connectorCase
+    try {
+        $initOutput = & $PowerShellPath -NoProfile -NonInteractive -File $InitScript -EnsureConnectorVaultEnv 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Connector initialization failed" }
+        $first = [IO.File]::ReadAllText($envFile)
+        $keyLine = ($first -split "`r?`n" | Where-Object { $_.StartsWith('CREDENTIAL_ENCRYPTION_KEY=') })
+        $key = $keyLine.Substring($keyLine.IndexOf('=') + 1)
+        if ([Convert]::FromBase64String($key.Replace('-', '+').Replace('_', '/')).Length -ne 32) {
+            throw "Connector key is not a Fernet 32-byte key"
+        }
+        if (($initOutput -join "`n").Contains($key)) { throw "Connector initialization exposed its key" }
+        & $PowerShellPath -NoProfile -NonInteractive -File $InitScript -EnsureConnectorVaultEnv *> $null
+        if ($LASTEXITCODE -ne 0 -or [IO.File]::ReadAllText($envFile) -ne $first) { throw "Connector key was replaced" }
+        $partial = "CREDENTIAL_ENCRYPTION_KEY=synthetic-preserved`nCREDENTIAL_ENCRYPTION_KEY_ID="
+        [IO.File]::WriteAllText($envFile, $partial)
+        & $PowerShellPath -NoProfile -NonInteractive -File $InitScript -EnsureConnectorVaultEnv *> $null
+        if ($LASTEXITCODE -eq 0 -or [IO.File]::ReadAllText($envFile) -ne $partial) { throw "Incomplete binding was not preserved" }
+    } finally { Pop-Location }
+} finally {
+    $resolvedCase = [IO.Path]::GetFullPath($connectorCase)
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    if (-not $resolvedCase.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "Invalid cleanup target" }
+    Remove-Item -LiteralPath $resolvedCase -Recurse -Force
+}
+Write-Host "PowerShell connector encryption initialization matrix passed."

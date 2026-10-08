@@ -32,6 +32,9 @@ def reset_readiness_cache(monkeypatch: pytest.MonkeyPatch) -> None:
         return HealthyWorkerRedis()
 
     monkeypatch.setattr(readiness_service, "get_redis_client", healthy_redis)
+    async def healthy_vault():
+        return {"status": "ok", "required": False}
+    monkeypatch.setattr(readiness_service, "_probe_connector_vault", healthy_vault, raising=False)
 
 
 async def test_readiness_requires_startup_postgres_and_redis(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,8 +55,25 @@ async def test_readiness_requires_startup_postgres_and_redis(monkeypatch: pytest
             "redis": {"status": "ok"},
             "worker": {"status": "ok"},
         },
-        "components": {},
+        "components": {"connector_vault": {"status": "ok", "required": False}},
     }
+
+
+async def test_required_connector_vault_blocks_readiness_but_optional_unavailable_does_not(monkeypatch):
+    async def ok():
+        return None
+    async def unavailable():
+        return {"status": "error", "required": True, "code": "vault_key_missing"}
+    monkeypatch.setattr(readiness_service, "_probe_postgres", ok)
+    monkeypatch.setattr(readiness_service, "_probe_redis", ok)
+    monkeypatch.setattr(readiness_service, "_probe_connector_vault", unavailable, raising=False)
+    result = await readiness_service.get_readiness(startup_complete=True)
+    assert result["status"] == "not_ready"
+    readiness_service._readiness_cache = None
+    async def optional():
+        return {"status": "unavailable", "required": False, "code": "vault_unconfigured"}
+    monkeypatch.setattr(readiness_service, "_probe_connector_vault", optional)
+    assert (await readiness_service.get_readiness(startup_complete=True))["status"] == "ready"
 
 
 async def test_readiness_preserves_each_failed_fact(monkeypatch: pytest.MonkeyPatch) -> None:

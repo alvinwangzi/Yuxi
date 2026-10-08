@@ -1,7 +1,7 @@
 # Yuxi Initialization Script for PowerShell
 # This script helps set up the environment for the Yuxi project
 
-param([switch]$ValidateSecurityEnv)
+param([switch]$ValidateSecurityEnv, [switch]$EnsureConnectorVaultEnv)
 
 function New-RandomHex($ByteCount) {
     $bytes = [byte[]]::new($ByteCount)
@@ -146,6 +146,30 @@ function Ensure-JwtEnv {
 
 function Ensure-SandboxEnv {
     Ensure-SecuritySecret "SANDBOX_PROVISIONER_TOKEN" @("JWT_SECRET_KEY", "API_KEY_DERIVATION_SECRET")
+    Ensure-ConnectorVaultEnv
+}
+
+function Ensure-ConnectorVaultEnv {
+    # 只在完整缺省时创建当前密钥，不替换已有或不完整的绑定。
+    $connectorKey = Get-EnvValue "CREDENTIAL_ENCRYPTION_KEY"
+    $connectorKeyId = Get-EnvValue "CREDENTIAL_ENCRYPTION_KEY_ID"
+    if ([string]::IsNullOrEmpty($connectorKey) -and [string]::IsNullOrEmpty($connectorKeyId)) {
+        $bytes = [byte[]]::new(32)
+        $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+        $value = [Convert]::ToBase64String($bytes).Replace('+', '-').Replace('/', '_')
+        Set-EnvValue "CREDENTIAL_ENCRYPTION_KEY" $value
+        Set-EnvValue "CREDENTIAL_ENCRYPTION_KEY_ID" "connector-v1"
+        Write-Host "Generated connector encryption configuration and saved it to .env."
+    } elseif ([string]::IsNullOrEmpty($connectorKey) -or [string]::IsNullOrEmpty($connectorKeyId)) {
+        throw "Connector encryption configuration is incomplete; restore its original key and key_id."
+    }
+}
+
+if ($EnsureConnectorVaultEnv) {
+    if (-not (Test-Path -LiteralPath ".env")) { throw ".env does not exist" }
+    Ensure-ConnectorVaultEnv
+    exit 0
 }
 
 if ($ValidateSecurityEnv) {

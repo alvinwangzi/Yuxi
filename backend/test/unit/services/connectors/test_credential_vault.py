@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,29 @@ from yuxi.services.connectors.credential_vault import (
     ensure_vault_available,
     generate_key_bytes,
 )
+
+
+def test_generated_key_roundtrips_through_environment_configuration(monkeypatch):
+    """初始化生成的密钥应能被真实配置入口加载。"""
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", generate_key_bytes())
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY_ID", "generated-test")
+    vault = CredentialVault.from_environment()
+    encrypted = vault.encrypt(b"synthetic-test-value")
+    assert vault.decrypt(encrypted.ciphertext, encrypted.key_id) == b"synthetic-test-value"
+
+
+def test_environment_key_ring_can_decrypt_the_previous_key_without_reusing_it_for_writes(monkeypatch):
+    """轮换期间配置入口保留旧解密能力，但新写入只用当前 key。"""
+    old_key, new_key = Fernet.generate_key(), Fernet.generate_key()
+    ciphertext = Fernet(old_key).encrypt(b"synthetic-old-value")
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", new_key.decode())
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY_ID", "new")
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_OLD_KEYS_JSON", json.dumps({"old": old_key.decode()}))
+    vault = CredentialVault.from_environment()
+    assert vault.decrypt(ciphertext, "old") == b"synthetic-old-value"
+    encrypted = vault.encrypt(b"synthetic-new-value")
+    assert encrypted.key_id == "new"
+    assert Fernet(new_key).decrypt(encrypted.ciphertext) == b"synthetic-new-value"
 
 
 class TestCredentialVault:
@@ -151,9 +175,7 @@ class TestGenerateKeyBytes:
 
     def test_generated_key_is_usable(self):
         key_str = generate_key_bytes()
-        import base64
-        raw = base64.urlsafe_b64decode(key_str.encode("utf-8"))
-        fernet = Fernet(raw)
+        fernet = Fernet(key_str.encode("utf-8"))
         data = fernet.encrypt(b"hello")
         assert fernet.decrypt(data) == b"hello"
 

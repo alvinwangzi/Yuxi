@@ -238,8 +238,14 @@
                 class="message-input-stage"
                 :class="{ 'has-tool-approval': currentToolApprovalVisible }"
               >
+                <ConnectorApprovalPanel
+                  :open="currentApprovalModalVisible && approvalState.kind === 'connector'"
+                  :invocation-ids="approvalState.invocationId ? [approvalState.invocationId] : []"
+                  @update:open="value => { if (!value) hideApprovalState() }"
+                  @decided="handleConnectorDecision"
+                />
                 <HumanApprovalModal
-                  :visible="currentApprovalModalVisible"
+                  :visible="currentApprovalModalVisible && approvalState.kind !== 'connector'"
                   :questions="currentApprovalQuestions"
                   :kind="approvalState.kind"
                   :action-requests="approvalState.actionRequests"
@@ -919,6 +925,7 @@ import { MessageProcessor } from '@/utils/messageProcessor'
 import dayjs, { parseToShanghai } from '@/utils/time'
 import { agentApi, threadApi } from '@/apis'
 import HumanApprovalModal from '@/components/HumanApprovalModal.vue'
+import ConnectorApprovalPanel from '@/components/extensions/ConnectorApprovalPanel.vue'
 import { extractPendingInterrupt, useApproval } from '@/composables/useApproval'
 import { useAgentThreadState, IDLE_QUEUE_SNAPSHOT } from '@/composables/useAgentThreadState'
 import { useAgentRunStream } from '@/composables/useAgentRunStream'
@@ -3642,12 +3649,10 @@ const handleApprovalWithStream = async (answer) => {
     threadState.pendingInterrupt = null
     threadState.isStreaming = true
     resetOnGoingConv(threadId, { preserveRequestStreams: true })
-    const requestId = createClientRequestId()
     const runResp = await agentApi.createAgentRun({
       query: null,
       agent_slug: currentAgentId.value,
       thread_id: threadId,
-      meta: { request_id: requestId },
       resume: answer,
       created_by_run_id: interruptedRunId
     })
@@ -3671,6 +3676,11 @@ const handleApprovalWithStream = async (answer) => {
     threadState.replyLoadingVisible = false
     handleChatError(error, 'resume')
   }
+}
+
+const handleConnectorDecision = async (item) => {
+  if (item.invocation_id !== approvalState.invocationId) return
+  await handleApprovalWithStream({ invocation_id: item.invocation_id })
 }
 
 const handleQuestionSubmit = (answer) => {

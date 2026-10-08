@@ -16,12 +16,17 @@
             />
           </a-button>
         </a-tooltip>
-        <a-button type="primary" @click="openCreateModal" class="lucide-icon-btn">
+        <a-button type="primary" @click="openCreateModal" class="lucide-icon-btn" :disabled="typesLoading || !!typesError || !connectorTypes.length || (vaultStatus && vaultStatus.status !== 'ok')">
           <Plus :size="14" />
           <span>添加连接器</span>
         </a-button>
       </template>
     </PageShoulder>
+    <a-alert v-if="typesError" type="error" show-icon message="连接器类型加载失败，请重试">
+      <template #action><a-button size="small" :loading="typesLoading" @click="fetchTypes">重试加载类型</a-button></template>
+    </a-alert>
+    <a-alert v-if="vaultStatus && vaultStatus.status !== 'ok'" type="warning" show-icon
+      message="连接器保险库不可用，请配置有效 key ring 后创建或启用连接器" />
 
     <div class="category-tab-bar">
       <button
@@ -33,7 +38,6 @@
         @click="selectedType = key.value"
       >
         {{ key.label }}
-        <span v-if="typeCounts[key.value]" class="tab-count">{{ typeCounts[key.value] }}</span>
       </button>
     </div>
 
@@ -48,7 +52,7 @@
           :key="conn.slug"
           variant="mini"
           :title="conn.name"
-          :description="conn.description || '暂无描述'"
+          :description="[conn.enabled ? '已启用' : '已停用', getTypeLabel(conn.connector_type), conn.description].filter(Boolean).join(' · ')"
           :tags="conn.tags || []"
           @click="openDetail(conn)"
         >
@@ -62,6 +66,13 @@
               </a-tag>
               <span class="conn-type-label">{{ getTypeLabel(conn.connector_type) }}</span>
             </div>
+          </template>
+          <template #card-more-action-corner>
+            <a-menu>
+              <a-menu-item @click="openOperationEditor(conn)">操作管理</a-menu-item>
+              <a-menu-item @click="openUsagePanel(conn)">调用记录</a-menu-item>
+              <a-menu-item @click="openApprovalPanel(conn)">待审批调用</a-menu-item>
+            </a-menu>
           </template>
           <template #action>
             <button
@@ -87,6 +98,7 @@
         </InfoCard>
       </ExtensionCardGrid>
     </a-spin>
+    <a-pagination v-if="totalConnectors > pageSize" v-model:current="currentPage" :page-size="pageSize" :total="totalConnectors" :show-size-changer="false" @change="fetchConnectors" />
 
     <ConnectorConfigModal
       v-model:open="configModalVisible"
@@ -104,6 +116,7 @@
     <ConnectorUsagePanel
       v-model:open="usagePanelVisible"
       :connector="currentConnector"
+      @reconcile="openReconcile"
     />
 
     <ConnectorApprovalPanel
@@ -120,11 +133,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Check, Plus, RefreshCw, Settings, Trash2 } from '@lucide/vue'
 import {
   getConnectors,
+  getConnector,
   getConnectorTypes,
   deleteConnector,
 } from '@/apis/connector_api'
@@ -152,8 +166,18 @@ const TYPE_ICONS = {
 const loading = ref(false)
 const connectors = ref([])
 const connectorTypes = ref([])
+const typesLoading = ref(false)
+const typesError = ref(false)
+let typeRequestGeneration = 0
+let listRequestGeneration = 0
+let detailRequestGeneration = 0
+const vaultStatus = ref(null)
 const searchQuery = ref('')
 const selectedType = ref('all')
+const currentPage = ref(1)
+const pageSize = 20
+const totalConnectors = ref(0)
+watch([searchQuery, selectedType], () => { currentPage.value = 1; fetchConnectors() })
 const actionLoadingSlug = ref('')
 
 const configModalVisible = ref(false)
@@ -172,29 +196,7 @@ const typeTabs = computed(() => {
   return tabs
 })
 
-const typeCounts = computed(() => {
-  const counts = { all: connectors.value.length }
-  for (const conn of connectors.value) {
-    const t = conn.connector_type
-    counts[t] = (counts[t] || 0) + 1
-  }
-  return counts
-})
-
-const filteredConnectors = computed(() => {
-  let result = [...connectors.value]
-  if (selectedType.value !== 'all') {
-    result = result.filter((c) => c.connector_type === selectedType.value)
-  }
-  if (!searchQuery.value) return result
-  const q = searchQuery.value.toLowerCase()
-  return result.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      (c.description || '').toLowerCase().includes(q) ||
-      c.slug.toLowerCase().includes(q),
-  )
-})
+const filteredConnectors = computed(() => connectors.value)
 
 function getTypeLabel(type) {
   return TYPE_LABELS[type] || type
@@ -205,13 +207,21 @@ function getTypeIcon(type) {
 }
 
 function openCreateModal() {
+  detailRequestGeneration += 1
   currentConnector.value = null
   configModalVisible.value = true
 }
 
-function openDetail(conn) {
-  currentConnector.value = conn
-  configModalVisible.value = true
+async function openDetail(conn) {
+  const generation = ++detailRequestGeneration
+  try {
+    const result = await getConnector(conn.slug)
+    if (generation !== detailRequestGeneration) return
+    currentConnector.value = result.data
+    configModalVisible.value = true
+  } catch (error) {
+    if (generation === detailRequestGeneration) message.error(error.message || '读取配置失败')
+  }
 }
 
 function openOperationEditor(conn) {
@@ -256,27 +266,40 @@ function confirmDelete(conn) {
 }
 
 async function fetchConnectors() {
+  const generation = ++listRequestGeneration
   try {
     loading.value = true
-    const result = await getConnectors()
+    const result = await getConnectors({ page: currentPage.value, page_size: pageSize, search: searchQuery.value, connector_type: selectedType.value === 'all' ? undefined : selectedType.value })
+    if (generation !== listRequestGeneration) return
     if (result.success) {
       connectors.value = result.data || []
+      totalConnectors.value = result.total || 0
     }
   } catch (err) {
+    if (generation !== listRequestGeneration) return
     message.error(err.message || '获取连接器列表失败')
   } finally {
-    loading.value = false
+    if (generation === listRequestGeneration) loading.value = false
   }
 }
 
 async function fetchTypes() {
+  const generation = ++typeRequestGeneration
+  typesLoading.value = true
+  typesError.value = false
   try {
     const result = await getConnectorTypes()
-    if (result.success) {
-      connectorTypes.value = result.data || []
-    }
+    if (generation !== typeRequestGeneration) return
+    const types = Array.isArray(result.data) ? result.data.filter(type => type.type && (type.capabilities?.read || type.capabilities?.write)) : []
+    if (!result.success || !types.length) throw new Error('connector_types_unavailable')
+    connectorTypes.value = types
+    vaultStatus.value = result.vault || null
   } catch {
-    // 类型加载失败不阻断页面
+    if (generation !== typeRequestGeneration) return
+    connectorTypes.value = []
+    typesError.value = true
+  } finally {
+    if (generation === typeRequestGeneration) typesLoading.value = false
   }
 }
 
@@ -286,11 +309,17 @@ function handleSaved() {
 }
 
 function handleOperationSaved() {
-  operationEditorVisible.value = false
+  fetchConnectors()
 }
 
+function openReconcile(invocation) {
+  currentInvocation.value = invocation
+  usagePanelVisible.value = false
+  reconcileModalVisible.value = true
+}
 function handleReconcileResolved() {
   reconcileModalVisible.value = false
+  usagePanelVisible.value = true
 }
 
 onMounted(() => {

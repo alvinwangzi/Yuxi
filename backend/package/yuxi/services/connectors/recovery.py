@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from yuxi.utils import logger
-from yuxi.utils.datetime_utils import utc_now_naive
+from yuxi.utils.datetime_utils import utc_now
 
 
 async def recover_stale_leases(session_context_factory) -> dict[str, int]:
@@ -19,36 +19,47 @@ async def recover_stale_leases(session_context_factory) -> dict[str, int]:
 
     async with session_context_factory() as db:
         from yuxi.repositories.connector_execution_repository import ConnectorExecutionRepository
+
         exec_repo = ConnectorExecutionRepository(db)
 
-        now = utc_now_naive()
+        now = utc_now()
         stale = await exec_repo.find_stale_leases(now)
 
         for invocation in stale:
             stats["total"] += 1
-            owner_attempt = invocation.owner_attempt or "recovery"
+            owner_attempt = invocation.owner_attempt
+            error_code = (
+                "owner_missing"
+                if owner_attempt is None
+                else "lease_missing"
+                if invocation.lease_expires_at is None
+                else "lease_expired"
+            )
 
             if invocation.operation_type == "read":
                 await exec_repo.finalize_invocation(
                     invocation,
                     owner_attempt=owner_attempt,
                     status="failed",
-                    remote_outcome="not_sent",
-                    error_code="lease_expired",
-                    error_summary="读操作 lease 过期，自动标记失败",
+                    remote_outcome="unknown",
+                    error_code=error_code,
+                    error_summary="读操作 owner/lease 无效，自动标记失败",
                 )
                 stats["read_failed"] += 1
             else:
                 await exec_repo.mark_unknown(
                     invocation,
                     owner_attempt=owner_attempt,
-                    error_code="lease_expired",
-                    error_summary="写操作 lease 过期，需要人工核对",
+                    error_code=error_code,
+                    error_summary="写操作 owner/lease 无效，需要人工核对",
                 )
                 stats["write_unknown"] += 1
+            await exec_repo.abandon_owned_attempt(invocation.id, owner_attempt, error_code=error_code)
 
     if stats["total"] > 0:
-        logger.info(f"连接器恢复: 处理 {stats['total']} 个过期调用 "
-                     f"(读失败={stats['read_failed']}, 写未知={stats['write_unknown']})")
+        logger.info(
+            f"连接器恢复: 处理 {stats['total']} 个过期调用 "
+            f"(读失败={stats['read_failed']}, 写未知={stats['write_unknown']})"
+        )
 
     return stats

@@ -2297,6 +2297,7 @@ defineExpose({
     font-size: 11px;
     color: var(--gray-800);
   }
+}
 .provider-modal-titlebar {
   display: flex;
   align-items: center;

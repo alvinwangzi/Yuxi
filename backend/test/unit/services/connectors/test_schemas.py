@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from yuxi.services.connectors.schemas import (
     DEFAULT_CONCURRENCY_LIMIT,
     DEFAULT_MAX_RESPONSE_BYTES,
@@ -19,6 +20,35 @@ from yuxi.services.connectors.schemas import (
     validate_static_headers,
     validate_timeout,
 )
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"unsupported_keyword": True},
+        {"$ref": "#"},
+        {"$defs": {"loop": {"$ref": "#/$defs/loop"}}, "$ref": "#/$defs/loop"},
+        {"$ref": "#/$defs/missing"},
+    ],
+)
+def test_unsupported_keyword_and_recursive_or_missing_ref_fail_on_save(schema):
+    """保存时拒绝不支持关键字与引用图问题，不推迟为运行时 RecursionError。"""
+    with pytest.raises(ConnectorSchemaError):
+        validate_json_schema(schema)
+
+
+def test_property_names_are_data_and_shared_local_definition_is_valid():
+    """字段名不当作关键字，同一无环 definition 可被不同属性复用。"""
+    schema = {
+        "type": "object",
+        "$defs": {"text": {"type": "string"}},
+        "properties": {"unsupported_keyword": {"$ref": "#/$defs/text"}, "$custom": {"$ref": "#/$defs/text"}},
+    }
+    validate_json_schema(schema)
+    assert validate_params({"unsupported_keyword": "a", "$custom": "b"}, schema) == {
+        "unsupported_keyword": "a",
+        "$custom": "b",
+    }
 
 
 class TestValidateJsonSchema:
@@ -81,6 +111,15 @@ class TestValidateJsonSchema:
 
 class TestValidateParams:
     """业务参数校验。"""
+
+    def test_invalid_parameter_diagnostics_never_echo_private_values(self):
+        """独立哨兵不能进入异常、工具错误或数据库事务日志。"""
+        with pytest.raises(ConnectorSchemaError) as failure:
+            validate_params(
+                {"count": "synthetic-sensitive-parameter"},
+                {"type": "object", "properties": {"count": {"type": "integer"}}},
+            )
+        assert "synthetic-sensitive-parameter" not in str(failure.value)
 
     def test_valid_params_pass(self):
         schema = {
@@ -186,6 +225,11 @@ class TestResolveBodyTemplate:
 
 
 class TestApplyResponseMapping:
+    def test_duplicate_mapping_cannot_amplify_bounded_provider_body(self):
+        """合法路径重复引用也受独立输出预算限制，不能扩大为数十 MiB。"""
+        with pytest.raises(ConnectorSchemaError):
+            apply_response_mapping({"data": "x" * (512 * 1024)}, {str(index): "data" for index in range(100)})
+
     """响应字段映射。"""
 
     def test_none_mapping_returns_empty(self):

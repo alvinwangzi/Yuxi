@@ -15,6 +15,7 @@ on:
       - 'scripts/init.sh'
       - 'scripts/init.ps1'
       - 'scripts/test_init_security.ps1'
+      - 'scripts/test_connector_init.py'
       - 'scripts/migrate-storage.sh'
       - '.github/workflows/test.yml'
   push:
@@ -31,6 +32,7 @@ on:
       - 'scripts/init.sh'
       - 'scripts/init.ps1'
       - 'scripts/test_init_security.ps1'
+      - 'scripts/test_connector_init.py'
       - 'scripts/migrate-storage.sh'
       - '.github/workflows/test.yml'
 
@@ -64,6 +66,9 @@ jobs:
 
       - name: Run complete unit inventory
         run: uv run pytest test/unit -m 'not slow' -q
+
+      - name: Verify native Bash connector initialization
+        run: uv run python ../scripts/test_connector_init.py
 
   powershell-security-contract:
     name: PowerShell security environment contract

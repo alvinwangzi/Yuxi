@@ -9,7 +9,7 @@
   >
     <div class="connector-operation-editor">
       <div class="operation-toolbar">
-        <a-button type="primary" size="small" @click="openNewOperation">
+        <a-button v-if="connector?.connector_type === 'generic_rest'" type="primary" size="small" @click="openNewOperation">
           <template #icon><Plus :size="14" /></template>
           添加操作
         </a-button>
@@ -28,8 +28,8 @@
           <div v-for="op in operations" :key="op.slug" class="operation-item">
             <div class="operation-item-header">
               <div class="operation-item-info">
-                <a-tag :color="op.category === 'write' ? 'orange' : 'blue'" :bordered="false">
-                  {{ op.category === 'write' ? '写入' : '读取' }}
+                <a-tag :color="op.operation_type === 'write' ? 'orange' : 'blue'" :bordered="false">
+                  {{ op.operation_type === 'write' ? '写入' : '读取' }}
                 </a-tag>
                 <span class="operation-name">{{ op.name }}</span>
                 <span class="operation-slug">{{ op.slug }}</span>
@@ -41,8 +41,8 @@
             </div>
             <div v-if="op.description" class="operation-desc">{{ op.description }}</div>
             <div class="operation-meta">
-              <span>HTTP: {{ op.method }} {{ op.path_template || '-' }}</span>
-              <span v-if="op.requires_approval" class="approval-badge">需审批</span>
+              <span>HTTP: {{ op.http_method }} {{ op.endpoint_template || '-' }}</span>
+              <span v-if="op.operation_type === 'write' && op.approval_policy === 'required'" class="approval-badge">需审批</span>
             </div>
           </div>
         </div>
@@ -68,7 +68,7 @@
             />
           </a-form-item>
           <a-form-item label="分类" required>
-            <a-radio-group v-model:value="editForm.category">
+            <a-radio-group v-model:value="editForm.operation_type" :disabled="!editingNew">
               <a-radio value="read">读取</a-radio>
               <a-radio value="write">写入</a-radio>
             </a-radio-group>
@@ -80,7 +80,7 @@
           <a-divider>HTTP 配置</a-divider>
 
           <a-form-item label="HTTP 方法">
-            <a-select v-model:value="editForm.method">
+            <a-select v-model:value="editForm.http_method" :disabled="providerOwns('http_method')">
               <a-select-option value="GET">GET</a-select-option>
               <a-select-option value="POST">POST</a-select-option>
               <a-select-option value="PUT">PUT</a-select-option>
@@ -89,7 +89,7 @@
             </a-select>
           </a-form-item>
           <a-form-item label="路径模板">
-            <a-input v-model:value="editForm.path_template" placeholder="/api/v1/records/{record_id}" />
+            <a-input v-model:value="editForm.endpoint_template" :disabled="providerOwns('endpoint_template')" placeholder="/v1/records/&#123;&#123;record_id&#125;&#125;" />
           </a-form-item>
 
           <a-form-item label="请求参数 Schema (JSON)">
@@ -104,13 +104,16 @@
             <a-textarea
               v-model:value="editForm.response_mapping_json"
               :rows="3"
-              placeholder='{"result": "$.data"}'
+              placeholder='{"result": "data"}'
             />
           </a-form-item>
 
-          <a-form-item label="需要审批">
-            <a-switch v-model:checked="editForm.requires_approval" />
-          </a-form-item>
+          <a-form-item label="查询模板 (JSON)"><a-textarea v-model:value="editForm.query_template_json" :disabled="providerOwns('query_template')" :rows="3" /></a-form-item>
+          <a-form-item label="请求正文模板 (JSON)"><a-textarea v-model:value="editForm.body_template_json" :disabled="providerOwns('body_template')" :rows="3" /></a-form-item>
+          <a-form-item label="读取重试策略 (JSON)"><a-textarea v-model:value="editForm.retry_policy_json" :rows="2" placeholder='REST 读取最多三次，例如 {"max_attempts":3}；写入不自动重试' /></a-form-item>
+          <a-form-item label="远端幂等策略 (JSON)"><a-textarea v-model:value="editForm.remote_idempotency_json" :rows="2" placeholder='REST 写入，例如 {"header_name":"Idempotency-Key"}；需目标接口支持' /></a-form-item>
+          <a-form-item label="响应类型"><a-select v-model:value="editForm.response_type" :disabled="providerOwns('response_type')"><a-select-option value="json">JSON</a-select-option><a-select-option value="text">文本</a-select-option><a-select-option value="empty">无正文</a-select-option></a-select></a-form-item>
+          <a-form-item label="写入审批策略"><a-select v-model:value="editForm.approval_policy"><a-select-option value="required">每次人工审批</a-select-option><a-select-option value="preauthorized">预授权（仍检查写权限）</a-select-option></a-select></a-form-item>
         </a-form>
       </a-modal>
     </div>
@@ -121,6 +124,7 @@
 import { ref, reactive, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Plus, RefreshCw } from '@lucide/vue'
+import { operationPayload } from '@/utils/connector_forms'
 import {
   getConnectorOperations,
   createConnectorOperation,
@@ -136,26 +140,32 @@ const props = defineProps({
 const emit = defineEmits(['update:open', 'saved'])
 
 const loading = ref(false)
+let requestGeneration = 0
 const operations = ref([])
 const editModalVisible = ref(false)
 const editingNew = ref(true)
+const editingOperation = ref(null)
 const editSaving = ref(false)
 
 const editForm = reactive({
   name: '',
   slug: '',
-  category: 'read',
+  operation_type: 'read',
   description: '',
-  method: 'GET',
-  path_template: '',
+  http_method: 'GET',
+  endpoint_template: '',
   request_schema_json: '',
   response_mapping_json: '',
-  requires_approval: false,
+  approval_policy: 'required', response_type: 'json', query_template_json: '', body_template_json: '', retry_policy_json: '', remote_idempotency_json: '',
 })
 
 watch(
-  () => props.open,
-  (val) => {
+  [() => props.open, () => props.connector?.slug],
+  ([val]) => {
+    requestGeneration++
+    loading.value = false
+    operations.value = []
+    editModalVisible.value = false
     if (val && props.connector?.slug) {
       fetchOperations()
     }
@@ -165,40 +175,51 @@ watch(
 async function fetchOperations() {
   if (!props.connector?.slug) return
   loading.value = true
+  const generation = ++requestGeneration
   try {
     const result = await getConnectorOperations(props.connector.slug)
+    if (generation !== requestGeneration) return
     if (result.success) {
       operations.value = result.data || []
     }
   } catch (err) {
+    if (generation !== requestGeneration) return
     message.error(err.message || '获取操作列表失败')
   } finally {
-    loading.value = false
+    if (generation === requestGeneration) loading.value = false
   }
 }
 
+function providerOwns(field) { return editingOperation.value?.provider_owned_fields?.includes(field) || false }
+
 function openNewOperation() {
   editingNew.value = true
+  editingOperation.value = null
   Object.assign(editForm, {
-    name: '', slug: '', category: 'read', description: '',
-    method: 'GET', path_template: '', request_schema_json: '',
-    response_mapping_json: '', requires_approval: false,
+    name: '', slug: '', operation_type: 'read', description: '',
+    http_method: 'GET', endpoint_template: '', request_schema_json: '',
+    response_mapping_json: '', approval_policy: 'required', response_type: 'json', query_template_json: '', body_template_json: '', retry_policy_json: '', remote_idempotency_json: '',
   })
   editModalVisible.value = true
 }
 
 function editOperation(op) {
   editingNew.value = false
+  editingOperation.value = op
   Object.assign(editForm, {
     name: op.name || '',
     slug: op.slug || '',
-    category: op.category || 'read',
+    operation_type: op.operation_type || 'read',
     description: op.description || '',
-    method: op.method || 'GET',
-    path_template: op.path_template || '',
+    http_method: op.http_method || 'GET',
+    endpoint_template: op.endpoint_template || '',
     request_schema_json: op.request_schema ? JSON.stringify(op.request_schema, null, 2) : '',
     response_mapping_json: op.response_mapping ? JSON.stringify(op.response_mapping, null, 2) : '',
-    requires_approval: !!op.requires_approval,
+    approval_policy: op.approval_policy || 'required', response_type: op.response_type || 'json',
+    query_template_json: op.query_template ? JSON.stringify(op.query_template, null, 2) : '',
+    body_template_json: op.body_template ? JSON.stringify(op.body_template, null, 2) : '',
+    retry_policy_json: op.retry_policy ? JSON.stringify(op.retry_policy, null, 2) : '',
+    remote_idempotency_json: op.remote_idempotency ? JSON.stringify(op.remote_idempotency, null, 2) : '',
   })
   editModalVisible.value = true
 }
@@ -209,34 +230,11 @@ async function saveOperation() {
     return
   }
 
-  let request_schema = null
-  let response_mapping = null
-  try {
-    if (editForm.request_schema_json?.trim()) {
-      request_schema = JSON.parse(editForm.request_schema_json)
-    }
-    if (editForm.response_mapping_json?.trim()) {
-      response_mapping = JSON.parse(editForm.response_mapping_json)
-    }
-  } catch {
-    message.error('Schema 或映射 JSON 格式错误')
-    return
-  }
-
+  let payload
+  try { payload = operationPayload(editForm, editingOperation.value) } catch (error) { message.error(error.message); return }
+  if (!editingNew.value) { delete payload.slug; delete payload.operation_type }
   editSaving.value = true
   try {
-    const payload = {
-      name: editForm.name,
-      slug: editForm.slug,
-      category: editForm.category,
-      description: editForm.description,
-      method: editForm.method,
-      path_template: editForm.path_template,
-      request_schema,
-      response_mapping,
-      requires_approval: editForm.requires_approval,
-    }
-
     let result
     if (editingNew.value) {
       result = await createConnectorOperation(props.connector.slug, payload)
@@ -291,6 +289,12 @@ function handleClose() {
 .connector-operation-editor {
   max-height: 65vh;
   overflow-y: auto;
+}
+
+.operation-form {
+  max-height: 58vh;
+  overflow-y: auto;
+  padding-right: 8px;
 }
 
 .operation-toolbar {

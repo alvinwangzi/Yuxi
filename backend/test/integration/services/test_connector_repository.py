@@ -6,6 +6,11 @@ import os
 import uuid
 
 import pytest
+from test.integration.isolated_postgres_fixtures import (
+    cleanup_test_knowledge_resources as cleanup_test_knowledge_resources,
+    cleanup_test_sandboxes as cleanup_test_sandboxes,
+    ensure_live_api_schema as ensure_live_api_schema,
+)
 from sqlalchemy.ext.asyncio import create_async_engine
 
 pytestmark = [

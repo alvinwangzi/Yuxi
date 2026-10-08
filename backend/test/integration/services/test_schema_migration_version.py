@@ -62,7 +62,7 @@ def _scoped_manager(engine) -> PostgresManager:
     return manager
 
 
-async def _create_isolated_manager(prefix: str):
+async def create_isolated_manager(prefix: str):
     """创建位于独立 PostgreSQL Schema 的 manager 与清理句柄。"""
     schema = f"{prefix}_{uuid.uuid4().hex[:16]}"
     admin_engine = create_async_engine(os.environ["POSTGRES_URL"], pool_pre_ping=True)
@@ -76,7 +76,7 @@ async def _create_isolated_manager(prefix: str):
     return schema, admin_engine, scoped_engine, _scoped_manager(scoped_engine)
 
 
-async def _drop_isolated_schema(schema: str, admin_engine, scoped_engine) -> None:
+async def drop_isolated_schema(schema: str, admin_engine, scoped_engine) -> None:
     """释放隔离 Schema 及其 engine。"""
     await scoped_engine.dispose()
     async with admin_engine.begin() as connection:
@@ -122,7 +122,7 @@ async def test_schema_migration_lock_serializes_real_postgres_sessions() -> None
 
 async def test_v072_business_converges_current_schema_idempotently() -> None:
     """v0.7.2 发布结构一次补齐当前字段与约束，重复执行保持幂等。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_task_schema")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_task_schema")
 
     try:
         await manager.create_business_tables()
@@ -284,12 +284,12 @@ async def test_v072_business_converges_current_schema_idempotently() -> None:
         }.issubset(scheduled_indexes)
         assert BUSINESS_SCHEMA_VERSION == 9
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 async def test_release_upgrade_adds_audit_columns_idempotently() -> None:
     """发布版缺失的 Trace 与 Message 审计列由完整升级补齐，且可安全重放。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_audit_schema")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_audit_schema")
     try:
         await manager.create_business_tables()
         async with scoped_engine.begin() as connection:
@@ -347,12 +347,12 @@ async def test_release_upgrade_adds_audit_columns_idempotently() -> None:
         assert "uq_messages_run_operation_id" not in audit_indexes
         assert "(run_id, role, operation_id)" in audit_indexes["uq_messages_run_role_operation_id"]
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 async def test_knowledge_v1_to_v2_adds_file_attempt_owner_idempotently() -> None:
     """知识 schema 相邻升级为文件中间态增加 Task attempt fencing。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_knowledge_schema")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_knowledge_schema")
     try:
         async with scoped_engine.begin() as connection:
             await connection.execute(
@@ -393,12 +393,12 @@ async def test_knowledge_v1_to_v2_adds_file_attempt_owner_idempotently() -> None
         )
         assert KNOWLEDGE_SCHEMA_VERSION == 2
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 async def test_knowledge_timestamp_defaults_match_database_clock_in_non_utc_session() -> None:
     """带时区字段不依赖 PostgreSQL 会话时区解释无时区 UTC。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_knowledge_clock")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_knowledge_clock")
     try:
         await manager.create_knowledge_tables()
         session_factory = async_sessionmaker(scoped_engine, expire_on_commit=False)
@@ -418,12 +418,12 @@ async def test_knowledge_timestamp_defaults_match_database_clock_in_non_utc_sess
         assert persisted_at.tzinfo is not None
         assert abs((persisted_at - database_now).total_seconds()) < 2
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 async def test_unversioned_knowledge_baseline_adds_timestamp_before_owner_convergence() -> None:
     """未版本化的旧表缺少 updated_at 时仍能收敛中间态。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_knowledge_baseline")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_knowledge_baseline")
     try:
         await manager.create_knowledge_tables()
         async with scoped_engine.begin() as connection:
@@ -458,12 +458,12 @@ async def test_unversioned_knowledge_baseline_adds_timestamp_before_owner_conver
         assert row.processing_task_id is None
         assert row.processing_owner is None
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 async def test_unversioned_baseline_repairs_existing_legacy_task_table() -> None:
     """未版本化数据库的 create_all + ensure 路径必须补齐旧 tasks 表。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_task_baseline")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_task_baseline")
 
     try:
         await manager.create_business_tables()
@@ -489,12 +489,12 @@ async def test_unversioned_baseline_repairs_existing_legacy_task_table() -> None
             ).one()
         assert tuple(row) == ("pending", None, 0, None)
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 async def test_schema_version_is_persisted_and_runtime_validation_fails_closed() -> None:
     """版本表缺失、错误和正确三种状态必须形成精确启动结论。"""
-    schema, admin_engine, scoped_engine, manager = await _create_isolated_manager("pytest_schema_version")
+    schema, admin_engine, scoped_engine, manager = await create_isolated_manager("pytest_schema_version")
 
     try:
         with pytest.raises(RuntimeError, match="business=missing"):
@@ -516,14 +516,14 @@ async def test_schema_version_is_persisted_and_runtime_validation_fails_closed()
             "knowledge": KNOWLEDGE_SCHEMA_VERSION,
         }
     finally:
-        await _drop_isolated_schema(schema, admin_engine, scoped_engine)
+        await drop_isolated_schema(schema, admin_engine, scoped_engine)
 
 
 @pytest.mark.parametrize("column_type", ["json", "jsonb"])
 @pytest.mark.parametrize("fail_version_write", [False, True])
 async def test_resource_selection_migration_is_atomic_and_does_not_repeat(fail_version_write, column_type):
     """真实 PostgreSQL 保留旧配置语义，版本失败回滚且重试不改新空数组。"""
-    schema, admin_engine, engine, manager = await _create_isolated_manager("resource_selection")
+    schema, admin_engine, engine, manager = await create_isolated_manager("resource_selection")
     try:
         await manager.create_schema_version_table()
         await manager.record_schema_version("business", 8)
@@ -594,4 +594,4 @@ async def test_resource_selection_migration_is_atomic_and_does_not_repeat(fail_v
             }
         assert await manager.get_schema_versions() == {"business": 9}
     finally:
-        await _drop_isolated_schema(schema, admin_engine, engine)
+        await drop_isolated_schema(schema, admin_engine, engine)

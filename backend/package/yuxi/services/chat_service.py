@@ -930,9 +930,16 @@ def _build_tool_approval_payload(payload: dict, thread_id: str) -> dict[str, Any
     }
 
 
-def _build_pending_interrupt_payload(info: Any, thread_id: str) -> dict[str, Any]:
+def build_pending_interrupt_payload(info: Any, thread_id: str) -> dict[str, Any]:
     """将 checkpoint 中断信息转换为前端可恢复的统一载荷。"""
     coerced = _coerce_interrupt_payload(info)
+    if coerced.get("type") == "connector_approval":
+        return {
+            "status": "connector_approval_required",
+            "invocation_id": coerced["invocation_id"],
+            "digest": coerced["digest"],
+            "thread_id": thread_id,
+        }
     approval_payload = _build_tool_approval_payload(coerced, thread_id)
     if approval_payload:
         return {"status": "human_approval_required", **approval_payload}
@@ -950,6 +957,8 @@ def _interrupt_terminal_details(chunk: bytes) -> tuple[str, str]:
     status = str(payload.get("status") or "interrupted")
     if status == "human_approval_required":
         return status, "需要用户审批工具操作"
+    if status == "connector_approval_required":
+        return status, "需要批准绑定的连接器调用"
     questions = payload.get("questions")
     if isinstance(questions, list) and questions and isinstance(questions[0], dict):
         question = str(questions[0].get("question") or "").strip()
@@ -1000,7 +1009,7 @@ async def check_and_handle_interrupts(
 
         interrupt_info = _extract_interrupt_info(state)
         if interrupt_info:
-            pending_interrupt = _build_pending_interrupt_payload(interrupt_info, thread_id)
+            pending_interrupt = build_pending_interrupt_payload(interrupt_info, thread_id)
             status = pending_interrupt.pop("status")
             meta["interrupt"] = pending_interrupt
             yield make_chunk(status=status, meta=meta, **pending_interrupt)
@@ -1617,7 +1626,7 @@ async def get_agent_state_view(
         }
         if latest_run and latest_run.status == "interrupted" and interrupt_info:
             response["interrupt"] = {
-                **_build_pending_interrupt_payload(interrupt_info, thread_id),
+                **build_pending_interrupt_payload(interrupt_info, thread_id),
                 "run_id": latest_run.id,
             }
         if include_relations:

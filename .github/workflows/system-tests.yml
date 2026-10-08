@@ -8,13 +8,21 @@ on:
       - 'backend/pyproject.toml'
       - 'backend/uv.lock'
       - 'backend/server/**'
+      - 'backend/scripts/**'
       - 'backend/test/integration/**'
       - 'backend/test/e2e/**'
       - 'backend/test/support/**'
+      - 'backend/test/unit/**'
+      - 'web/src/**'
+      - 'web/test/**'
       - 'docker/**'
       - 'docker-compose.yml'
       - 'docker-compose.prod.yml'
       - 'scripts/ci_prepare_system_tests_env.sh'
+      - 'scripts/init.sh'
+      - 'scripts/init.ps1'
+      - 'scripts/test_init_security.ps1'
+      - 'scripts/test_connector_init.py'
       - 'scripts/ci_build_topology_images.sh'
       - 'scripts/migrate-storage.sh'
       - '.github/workflows/system-tests.yml'
@@ -27,13 +35,21 @@ on:
       - 'backend/pyproject.toml'
       - 'backend/uv.lock'
       - 'backend/server/**'
+      - 'backend/scripts/**'
       - 'backend/test/integration/**'
       - 'backend/test/e2e/**'
       - 'backend/test/support/**'
+      - 'backend/test/unit/**'
+      - 'web/src/**'
+      - 'web/test/**'
       - 'docker/**'
       - 'docker-compose.yml'
       - 'docker-compose.prod.yml'
       - 'scripts/ci_prepare_system_tests_env.sh'
+      - 'scripts/init.sh'
+      - 'scripts/init.ps1'
+      - 'scripts/test_init_security.ps1'
+      - 'scripts/test_connector_init.py'
       - 'scripts/ci_build_topology_images.sh'
       - 'scripts/migrate-storage.sh'
       - '.github/workflows/system-tests.yml'
@@ -288,8 +304,10 @@ jobs:
         run: docker compose exec -T -e TEST_USERNAME="$E2E_USERNAME" -e TEST_PASSWORD="$E2E_PASSWORD" api uv run --no-sync --no-dev pytest test/integration/api/test_mcp_router.py -q
       - name: Verify versioned Schema migration contract
         run: docker compose exec -T api uv run --no-sync --no-dev pytest test/integration/services/test_schema_migration_version.py -q
+      - name: Verify connector runtime, network and schema units
+        run: docker compose exec -T api uv run --no-sync --no-dev pytest test/unit/services/connectors test/unit/agents/test_connector_tools.py test/unit/agents/test_connector_tool_interrupt.py test/unit/workflows test/unit/utils/test_outbound_http.py test/unit/knowledge/test_url_fetcher.py -q
       - name: Verify connector repository and execution lifecycle
-        run: docker compose exec -T api uv run --no-sync --no-dev pytest test/integration/services/test_connector_repository.py test/integration/services/test_connector_execution.py -q
+        run: docker compose exec -T -e TEST_USERNAME= -e TEST_PASSWORD= api uv run --no-sync --no-dev pytest test/integration/services/test_connector_execution.py test/integration/services/test_connector_http_security.py test/integration/services/test_connector_key_rotation.py test/integration/services/test_connector_management.py test/integration/services/test_connector_provider_protocols.py test/integration/services/test_connector_prepare_recovery.py test/integration/services/test_connector_repository.py test/integration/services/test_connector_resolution.py test/integration/services/test_connector_schema_v21.py test/integration/services/test_connector_service.py test/integration/services/test_connector_vault_readiness.py test/integration/services/test_workflow_connector_pause.py test/integration/services/test_workflow_agent_bridge.py test/integration/services/test_workflow_agent_approval.py -q
       - name: Verify connector HTTP security and router API
         run: docker compose exec -T -e TEST_USERNAME="$E2E_USERNAME" -e TEST_PASSWORD="$E2E_PASSWORD" api uv run --no-sync --no-dev pytest test/integration/services/test_connector_http_security.py test/integration/api/test_connector_router.py -q
       - name: Verify knowledge statistics projection
@@ -330,7 +348,10 @@ jobs:
         run: docker compose exec -T -e E2E_USERNAME -e E2E_PASSWORD api uv run --no-sync --no-dev pytest test/e2e/test_connector_workflow_path_e2e.py -q -m e2e_smoke --durations=10
       - name: Verify connector agent E2E path
         timeout-minutes: 10
-        run: docker compose exec -T -e E2E_USERNAME -e E2E_PASSWORD api uv run --no-sync --no-dev pytest test/e2e/test_connector_agent_path_e2e.py -q -m e2e_smoke --durations=10
+        run: docker compose exec -T -e E2E_USERNAME -e E2E_PASSWORD api uv run --no-sync --no-dev pytest test/e2e/test_connector_agent_path_e2e.py test/e2e/test_connector_admin_probe_e2e.py -q -m e2e_smoke --durations=10
+      - name: Verify workflow formal Agent bridge E2E
+        timeout-minutes: 10
+        run: docker compose exec -T -e E2E_USERNAME -e E2E_PASSWORD api uv run --no-sync --no-dev pytest test/e2e/test_workflow_agent_path_e2e.py -q -m e2e_smoke --durations=10
       - name: Verify identity transaction and replayable secret publication
         run: docker compose exec -T -e TEST_USERNAME="$E2E_USERNAME" -e TEST_PASSWORD="$E2E_PASSWORD" api uv run --no-sync --no-dev pytest test/integration/services/test_identity_admin_service.py test/integration/services/test_api_key_schema_migration.py test/integration/services/test_api_key_user_lifecycle.py test/integration/api/test_apikey_router.py -q
       - name: Verify destructive storage migration and Skill authorization

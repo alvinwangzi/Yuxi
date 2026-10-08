@@ -4,7 +4,8 @@ import { hasPendingInterruptPayload } from '@/utils/toolApproval'
 
 const APPROVAL_REQUIRED_STATUSES = new Set([
   'ask_user_question_required',
-  'human_approval_required'
+  'human_approval_required',
+  'connector_approval_required'
 ])
 
 const extractQuestionPayload = (chunk) => {
@@ -29,6 +30,11 @@ const extractToolApprovalPayload = (chunk) => {
 }
 
 export const extractPendingInterrupt = (chunk, threadId) => {
+  if (chunk?.status === 'connector_approval_required') {
+    if (!chunk.invocation_id || !chunk.digest) return null
+    return { kind: 'connector', invocationId: chunk.invocation_id, digest: chunk.digest,
+      status: chunk.status, threadId: chunk.thread_id || threadId, interruptedRunId: chunk.run_id || null }
+  }
   if (chunk?.status === 'human_approval_required') {
     const approval = extractToolApprovalPayload(chunk)
     if (!approval) return null
@@ -59,6 +65,8 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
     questions: [],
     kind: '',
     actionRequests: [],
+    invocationId: null,
+    digest: null,
     status: '',
     threadId: null,
     interruptedRunId: null
@@ -68,6 +76,8 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
     approvalState.showModal = true
     approvalState.questions = pendingInterrupt.questions || []
     approvalState.kind = pendingInterrupt.kind || 'question'
+    approvalState.invocationId = pendingInterrupt.invocationId || null
+    approvalState.digest = pendingInterrupt.digest || null
     approvalState.actionRequests = pendingInterrupt.actionRequests || []
     approvalState.status = pendingInterrupt.status || ''
     approvalState.threadId = pendingInterrupt.threadId || fallbackThreadId
@@ -78,6 +88,8 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
     approvalState.showModal = false
     approvalState.questions = []
     approvalState.kind = ''
+    approvalState.invocationId = null
+    approvalState.digest = null
     approvalState.actionRequests = []
     approvalState.status = ''
     approvalState.threadId = null

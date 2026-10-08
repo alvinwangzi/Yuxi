@@ -43,12 +43,15 @@
       <a-form layout="vertical" class="reconcile-form">
         <a-form-item label="判定结果" required>
           <a-radio-group v-model:value="verdict">
-            <a-radio value="success">确认成功</a-radio>
+            <a-radio value="succeeded">确认成功</a-radio>
             <a-radio value="failed">确认失败</a-radio>
           </a-radio-group>
         </a-form-item>
-        <a-form-item label="备注">
-          <a-textarea v-model:value="reason" :rows="2" placeholder="判定原因（可选）" />
+        <a-form-item label="核对证据与原因" required>
+          <a-textarea v-model:value="reason" :rows="2" placeholder="只读回查记录、关联 ID 和判定原因（必填）" />
+        </a-form-item>
+        <a-form-item v-if="verdict === 'succeeded'" label="独立回查取得的映射结果 (JSON)" required>
+          <a-textarea v-model:value="resultJson" :rows="4" placeholder="填写同一记录的回查结果，供原步骤恢复使用" />
         </a-form-item>
       </a-form>
     </div>
@@ -69,6 +72,7 @@ const emit = defineEmits(['update:open', 'resolved'])
 
 const verdict = ref('failed')
 const reason = ref('')
+const resultJson = ref('')
 const submitting = ref(false)
 
 function formatTime(t) {
@@ -90,17 +94,25 @@ watch(
     if (val) {
       verdict.value = 'failed'
       reason.value = ''
+      resultJson.value = ''
     }
   },
 )
 
 async function handleSubmit() {
   if (!props.invocation?.invocation_id) return
+  if (!reason.value.trim()) { message.warning('请填写独立远端证据与判定原因'); return }
+  let readbackResult = null
+  if (verdict.value === 'succeeded') {
+    try { readbackResult = JSON.parse(resultJson.value) } catch { message.warning('请填写有效 JSON 回查结果'); return }
+    if (readbackResult === null) { message.warning('成功核对需要实际回查结果'); return }
+  }
   submitting.value = true
   try {
     const result = await reconcileInvocation(props.invocation.invocation_id, {
-      verdict: verdict.value,
+      resolution: verdict.value,
       reason: reason.value || undefined,
+      result: readbackResult,
     })
     if (result.success) {
       message.success('核对完成')

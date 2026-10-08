@@ -13,7 +13,11 @@ from yuxi.knowledge.utils.url_validator import is_url_parsing_enabled, validate_
 from yuxi.utils import logger
 from yuxi.utils.outbound_http import (
     PUBLIC_ONLY_POLICY,
+    SSRFGuardBackend as SSRFGuardBackend,
     SSRFGuardTransport,
+    assert_no_blocked_address as assert_no_blocked_address,
+    is_blocked_address as is_blocked_address,
+    resolve_hostname_addresses as resolve_hostname_addresses,
 )
 
 MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024

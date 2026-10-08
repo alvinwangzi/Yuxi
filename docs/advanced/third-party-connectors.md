@@ -1,139 +1,70 @@
 # 第三方业务系统连接器
 
-Yuxi 支持通过"连接器"将外部业务系统（CRM、ERP、OA 等）接入平台，让智能体和工作流能够查询和操作这些系统。
+连接器将受控外部操作提供给 Agent 和工作流。当前类型为 generic_rest、salesforce、feishu_bitable_crm；本地链路通过不表示目标组织已接入。外部账号、字段权限和独立写后回查由系统 Owner 验证。
 
-## 核心概念
+## 配置与权限
 
-- **连接器**：一个外部系统的配置实例，包含地址、认证方式和操作列表。
-- **操作**：连接器下的具体 API 调用，分为只读（read）和写入（write）两种类型。
-- **适配器**：连接器的执行后端，决定如何解析配置、发起请求和处理响应。
+管理员在“扩展 → 连接器”创建停用草稿，填写地址、字段、操作和 Vault 凭据，再明确读取/写入范围并启用。缺省范围为 deny，最终授权检查数据库中的当前用户、部门、角色、启用状态及版本。
 
-## 支持的连接器类型
+凭据只在专用输入写入，编辑留空保持，不回填秘密。启用配置必须有完整认证配对；删除必需凭据应同时停用或补齐，同 key 同时 upsert/delete 被拒绝。key ring、迁移和轮换见[部署指南](./deployment.md)。
 
-| 类型 | 说明 |
-| --- | --- |
-| `generic_rest` | 通用 REST 适配器，管理员自行配置 base_url、认证方式和操作定义 |
-| `salesforce` | Salesforce REST API 适配，封装 OAuth2 / Session ID 认证 |
-| `feishu_bitable_crm` | 飞书多维表格 CRM 适配，基于飞书多维表格 API（非飞书 CRM API） |
-
-## 创建连接器
-
-管理员在 **扩展 → 连接器** 页面创建连接器。需要填写：
-
-1. **基本信息**：名称、slug（唯一标识）、描述
-2. **类型与配置**：选择连接器类型，填写对应配置（如 `generic_rest` 需要 `base_url`、`auth_type`）
-3. **凭据**：API Key、Token 等敏感信息，加密存储
-4. **操作定义**：每个操作的 HTTP 方法、端点模板、入参 Schema、响应映射
-
-以 `generic_rest` 为例，配置 JSON：
+REST 配置示例不含真实凭据：
 
 ```json
 {
-  "base_url": "https://crm.example.com/api/v1",
-  "auth_type": "bearer_token",
-  "default_headers": {
-    "Accept": "application/json"
-  }
+  "base_url": "https://crm.example.com",
+  "auth_type": "bearer",
+  "allowed_origins": ["https://crm.example.com"],
+  "static_headers": {"Accept": "application/json"},
+  "timeout_seconds": 30,
+  "max_response_bytes": 1048576
 }
 ```
 
-操作定义示例（查询客户）：
+认证类型为 none/bearer/basic/api_key，对应 Vault 凭据 token、username/password、api_key；静态头不承担认证。来源和端口严格匹配，重定向、代理环境变量、路径穿越及不允许的地址被拒绝。私网须同时有显式来源与受控 CIDR。
+
+## 操作与审批
+
+操作配置 read/write、HTTP 方法、相对端点、参数 Schema、query/body 模板与输出映射。路径使用 `{{record_id}}`，映射为 `data.name` 等受限字段路径，不是 `$.name` 或脚本。Schema 只接受声明子集，保存拒绝外部引用、环、过深引用和未知关键字。
+
+REST 管理员明确公开审批字段：
 
 ```json
 {
-  "slug": "query_customer",
-  "name": "查询客户",
-  "operation_type": "read",
-  "http_method": "GET",
-  "endpoint_template": "/customers/{{customer_id}}",
-  "request_schema": {
-    "type": "object",
-    "properties": {
-      "customer_id": { "type": "string" }
-    },
-    "required": ["customer_id"]
+  "type": "object",
+  "properties": {
+    "record_id": {"type": "string", "maxLength": 256, "x-approval-visible": true, "x-approval-target": true},
+    "status": {"type": "string", "maxLength": 64, "x-approval-visible": true}
   },
-  "response_mapping": {
-    "customer_name": "$.name",
-    "customer_email": "$.email"
-  }
+  "required": ["record_id", "status"],
+  "additionalProperties": false
 }
 ```
 
-## 凭据管理
+required 写入先提交 invocation，再由调用者本人决定；管理员不能代批准另一用户调用。面板显示冻结目标、公开变更、字段、版本和有效期，真实目标未公开时不能批准。digest 绑定全部参数，不能借模型的 approval=true 绕过。子 Agent 不提供 required 写审批转交。
 
-凭据使用 `Fernet` 对称加密后存储在数据库中，加密密钥通过环境变量 `CREDENTIAL_ENCRYPTION_KEY` 注入。
+REST 读取可配置 `retry_policy: {"max_attempts":3}`，仅瞬时错误重试；所有尝试共享总 timeout，每次重新授权并提交 attempt。写不自动重试。`remote_idempotency: {"header_name":"Idempotency-Key"}` 将专用头绑定持久 invocation ID，不承诺远端 exactly-once。
 
-- API 响应只返回凭据的 key 列表（`credential_keys`），不返回明文值
-- 更新凭据时通过 PATCH 请求单独提交，不与连接器配置混在一起
-- 密钥丢失会导致已存储凭据无法解密，生产环境建议使用密钥管理服务
+管理写测试必须携带 Idempotency-Key；相同用户/连接器/操作/键的响应丢失重试复用调用，参数变化返回 conflict。required 测试返回 409 和 invocation/digest/摘要，批准后同键继续，不建立免审批路径。
 
-## 智能体使用
+## 预置系统
 
-在智能体配置中关联连接器后，智能体在对话中会自动获得对应操作的工具能力。
+Salesforce 使用 server-to-server client credentials，由管理员配置 My Domain base_url、api_version、对象与读写字段；不提供 Session ID 或自由 SOQL。upsert 和外部业务键查询的 account_external_id_field 由配置拥有，模型仅提供键值。标准操作支持客户查询/读取/upsert、商机读取/更新，写后独立 GET 回查。
 
-- 每个操作被转换为一个 LangChain Tool，智能体可根据对话上下文自动调用
-- 工具名称格式：`cn_{连接器slug}__{操作slug}`
-- 权限校验：智能体必须拥有操作声明的 `read_scope`（只读）或 `write_scope`（写入）才能调用
-- 未关联连接器的智能体不会注入任何连接器工具
+飞书使用企业自建应用 app_id/app_secret。先保存停用 Base 草稿与完整应用凭据，再只读发现同一 Base 的表；选择客户/商机表并保存后读取字段，配置调用参数名、field ID/type。未确认类型不能启用为写字段，输入 Schema 随映射更新，运行时仍校验真实字段类型。支持有限文本、数值、选择、毫秒日期、复选框和关联格式，不靠名称猜测类型。
 
-## 工作流使用
+飞书 filters 只接受映射字段的有限等值条件和有界分页，不提供任意 DSL 或跨 Base 参数。记录输出仅保留操作允许字段与记录身份，未配置列不进入模型/工作流。映射输出有独立预算，不能通过重复路径放大响应。官方协议与外部验证边界见[连接器决策](../develop-guides/decisions/proposed/2026-10-07-third-party-system-connectors.md)。
 
-工作流编辑器支持添加"连接器"步骤，用于在流程中调用连接器操作。
+## 运行、审计与核对
 
-步骤配置包含：
+调用状态为 prepared、awaiting_approval、running、succeeded、failed、rejected、cancelled、unknown；控制状态与 remote_outcome 分开。本地映射失败不能抹掉已确认 receipt，超时也不能假装远端没有写入。
 
-- **connector_slug**：目标连接器
-- **operation_slug**：目标操作
-- **params**：操作参数，支持 `{{变量}}` 模板引用上游步骤输出
-- **output_key**：将操作结果绑定到工作流上下文
+Agent 使用正式 Request/FIFO/Run/checkpoint，恢复复用原调用。工作流持久保存定义、激活与等待项，waiting_agent/waiting_approval 释放 worker 槽位。unknown 暂停后续步骤；当前管理员在执行范围内凭独立回查证据核对，确认成功后原激活读取结果继续，不重发 HTTP。不能确认则保留 unknown。
 
-## 写操作审批
+取消不能撤回远端在途请求。未发送调用可取消，在途写仍需核对；失败/取消父工作流不会被迟到回调复活。管理列表支持分页与查询；调用详情展示绑定、版本、脱敏结果和各 attempt。本人回读也复核当前权限与可见 Run，管理读检查当前管理角色，不返回私人密文或原始结果。
 
-写操作（`operation_type: "write"`）默认需要审批，不会直接执行：
+删除清除活凭据并保留去重 tombstone/审计；未处置 running/unknown 写阻止删除。过期 payload 维护先 dry-run，执行保留 unknown 和身份记录；生产保留策略由 Owner 批准。
 
-1. **准备**：系统创建调用记录，状态为 `preparing`
-2. **等待审批**：状态变为 `waiting_approval`，管理员在管理界面审核请求内容
-3. **审批通过**：状态变为 `approved`，系统执行实际的外部 HTTP 调用
-4. **对账**：执行完成后状态进入 `reconciled`，记录最终结果
+## 验证边界
 
-未经审批的写操作不会产生任何外部请求。
-
-## 安全边界
-
-### SSRF 防护
-
-所有连接器的 HTTP 调用经过统一的 SSRF 防护层：
-
-- DNS 解析后校验目标地址，拦截私网段（10/172.16/192.168 等）
-- 封锁云元数据服务地址（169.254.169.254）
-- 禁止跟随重定向到受限地址
-
-### 凭据隔离
-
-- 凭据加密存储，API 不返回明文
-- 不同连接器的凭据相互隔离
-- 读取凭据需要管理员权限
-
-### 调用去重
-
-每次执行尝试拥有唯一的 `logical_call_key`，数据库唯一约束阻止相同调用的重复执行。并发场景下只有一个执行者能成功获取执行权。
-
-### 崩溃恢复
-
-执行尝试支持 lease 机制：worker 崩溃后，新 worker 可获取过期的 lease 并继续执行或标记失败，避免调用记录卡在中间状态。
-
-## 故障与恢复
-
-- **连接器不可用**：工作流步骤会明确失败并记录错误，不会静默跳过
-- **外部系统超时**：操作支持配置 `retry_policy`，超过重试次数后标记失败
-- **Worker 崩溃**：lease 过期后新 worker 自动接管，调用记录不会永久卡住
-- **外部写入失败**：Yuxi 侧无法回滚已发送到外部系统的写操作，审批流程提供人工确认环节以减少误操作
-
-## 限制
-
-- 连接器仅支持 HTTP/HTTPS 协议的外部系统
-- 不提供跨系统的分布式事务或自动补偿
-- 写操作的外部回滚由外部系统负责
-- Salesforce 和飞书多维表格 CRM 适配器依赖对应第三方 API 版本，API 变更时需更新适配器
-- 高频调用场景下 `connector_usage_logs` 表会快速增长，建议定期归档
+readiness 只证明接流量前置条件。PG、HTTP、worker、浏览器和独立远端回读分别提供证据；HTTP 200、日志关键词或 Agent 自述不能单独证明完成。缺 Salesforce 测试组织/飞书 Base 时，外部 read/write/readback 为 Not run，本地协议测试不能替代目标接入、部署或业务效果。

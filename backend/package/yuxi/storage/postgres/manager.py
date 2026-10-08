@@ -23,7 +23,7 @@ from yuxi.utils import logger
 from yuxi.utils.singleton import SingletonMeta
 
 AGENT_RUN_TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in AGENT_RUN_TERMINAL_STATUSES)
-BUSINESS_SCHEMA_VERSION = 20
+BUSINESS_SCHEMA_VERSION = 21
 KNOWLEDGE_SCHEMA_VERSION = 2
 SCHEMA_VERSION_TABLE = "yuxi_schema_migrations"
 AGENT_RUN_LEASE_SCHEMA_STATEMENTS = (
@@ -501,6 +501,15 @@ class PostgresManager(metaclass=SingletonMeta):
                     """),
                     {"name": name, "replacement": replacement},
                 )
+
+    async def upgrade_connector_schema_v21(self) -> None:
+        """连接器数据契约与版本事实必须在同一事务提交。"""
+        from yuxi.storage_migrations.v021_connectors import upgrade_connector_schema
+        self._check_initialized()
+        async with self.async_engine.begin() as connection:
+            await upgrade_connector_schema(
+                connection, version_table=SCHEMA_VERSION_TABLE, version=BUSINESS_SCHEMA_VERSION
+            )
 
     async def record_schema_version(self, domain: str, version: int) -> None:
         """在对应域迁移完整成功后记录当前版本。"""
@@ -1794,7 +1803,11 @@ class PostgresManager(metaclass=SingletonMeta):
             "ALTER TABLE IF EXISTS workflow_runs ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
             "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS step_execution_id VARCHAR(128)",
             "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS execution_count INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS pending_connector_invocation_id INTEGER",
+            "ALTER TABLE IF EXISTS workflow_step_runs "
+            "ADD COLUMN IF NOT EXISTS pending_connector_invocation_id VARCHAR(36)",
+            "ALTER TABLE IF EXISTS workflow_step_runs "
+            "ALTER COLUMN pending_connector_invocation_id TYPE VARCHAR(36) "
+            "USING pending_connector_invocation_id::text",
             "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS agent_request_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS agent_run_id VARCHAR(64)",
             "ALTER TABLE IF EXISTS workflow_step_runs ADD COLUMN IF NOT EXISTS agent_thread_id VARCHAR(64)",

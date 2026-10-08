@@ -45,6 +45,10 @@ class OutboundSecurityPolicy:
     )
 
     def is_blocked(self, address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            return self.is_blocked(address.ipv4_mapped)
+        if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified:
+            return True
         if address in self.extra_blocked_addresses:
             return True
         if address.is_global:
@@ -56,6 +60,11 @@ class OutboundSecurityPolicy:
 
 
 PUBLIC_ONLY_POLICY = OutboundSecurityPolicy()
+
+
+def is_blocked_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """兼容公网消费者的地址判断，策略仍由共享原语拥有。"""
+    return PUBLIC_ONLY_POLICY.is_blocked(address)
 
 
 async def resolve_hostname_addresses(hostname: str) -> ResolvedAddresses:
@@ -86,7 +95,7 @@ def assert_no_blocked_address(
     """校验全部解析地址均符合安全策略。"""
     blocked = [str(addr) for addr in addresses if policy.is_blocked(addr)]
     if blocked:
-        raise ValueError(f"Access to disallowed IP addresses: {', '.join(blocked)}")
+        raise ValueError(f"Access to private IP or otherwise disallowed addresses is forbidden: {', '.join(blocked)}")
 
 
 class SSRFGuardBackend(httpcore.AsyncNetworkBackend):

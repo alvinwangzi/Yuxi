@@ -1,120 +1,52 @@
 <template>
-  <a-modal
-    :open="open"
-    :title="isEdit ? `编辑连接器 — ${connector?.name}` : '添加连接器'"
-    :width="640"
-    :destroy-on-close="true"
-    :confirm-loading="saving"
-    @ok="handleSave"
-    @cancel="handleClose"
-  >
+  <a-modal :open="open" :title="isEdit ? `编辑连接器 — ${connector?.name}` : '添加连接器'"
+    :width="720" :destroy-on-close="true" :confirm-loading="saving" @ok="handleSave" @cancel="handleClose">
     <a-form layout="vertical" class="connector-config-form">
-      <a-form-item label="名称" required>
-        <a-input v-model:value="form.name" placeholder="连接器显示名称" />
-      </a-form-item>
-
-      <a-form-item v-if="!isEdit" label="标识 (slug)" required>
-        <a-input
-          v-model:value="form.slug"
-          placeholder="英文标识，如 salesforce_prod"
-          :disabled="isEdit"
-        />
-      </a-form-item>
-
+      <a-form-item label="名称" required><a-input v-model:value="form.name" placeholder="连接器显示名称" /></a-form-item>
+      <a-form-item label="标识 (slug)" required><a-input v-model:value="form.slug" :disabled="isEdit" placeholder="salesforce_prod" /></a-form-item>
       <a-form-item label="类型" required>
-        <a-select v-model:value="form.connector_type" placeholder="选择连接器类型">
-          <a-select-option v-for="t in connectorTypes" :key="t.type" :value="t.type">
-            {{ TYPE_LABELS[t.type] || t.type }}
-          </a-select-option>
+        <a-select v-model:value="form.connector_type" :disabled="isEdit" placeholder="选择连接器类型">
+          <a-select-option v-for="type in connectorTypes" :key="type.type" :value="type.type">{{ TYPE_LABELS[type.type] || type.type }}</a-select-option>
         </a-select>
       </a-form-item>
-
-      <a-form-item label="描述">
-        <a-textarea v-model:value="form.description" :rows="2" placeholder="连接器用途说明" />
-      </a-form-item>
-
-      <a-form-item label="启用状态">
-        <a-switch v-model:checked="form.enabled" />
-      </a-form-item>
-
-      <a-divider>认证配置</a-divider>
-
-      <a-form-item label="认证方式">
-        <a-select v-model:value="form.auth_type" placeholder="选择认证方式">
-          <a-select-option value="none">无</a-select-option>
-          <a-select-option value="bearer_token">Bearer Token</a-select-option>
-          <a-select-option value="basic_auth">Basic Auth</a-select-option>
-          <a-select-option value="oauth2_client">OAuth2 Client Credentials</a-select-option>
-          <a-select-option value="api_key">API Key</a-select-option>
-        </a-select>
-      </a-form-item>
-
-      <template v-if="form.auth_type === 'bearer_token'">
-        <a-form-item label="Token">
-          <a-input-password
-            v-model:value="credentialValues.token"
-            placeholder="输入 Bearer Token（留空保持不变）"
-          />
-          <div v-if="isEdit && hasExistingCredential('token')" class="credential-hint">
-            已配置，留空保持当前值
+      <a-form-item label="描述"><a-textarea v-model:value="form.description" :rows="2" /></a-form-item>
+      <a-form-item label="启用状态"><a-switch v-model:checked="form.enabled" /></a-form-item>
+      <a-divider>目标与权限</a-divider>
+      <a-form-item label="Base URL" required><a-input v-model:value="form.base_url" placeholder="https://api.example.com" /></a-form-item>
+      <a-form-item label="允许的来源地址（每行一个，含端口）"><a-textarea v-model:value="form.allowed_origins_text" :rows="2" placeholder="https://api.example.com" /></a-form-item>
+      <a-form-item label="允许的内网 CIDR（每行一个，可留空）"><a-textarea v-model:value="form.allowed_private_cidrs_text" :rows="2" placeholder="10.20.0.0/24" /></a-form-item>
+      <a-form-item label="读取范围 (JSON)" required><a-textarea v-model:value="form.read_scope_json" :rows="3" /></a-form-item>
+      <a-form-item label="写入范围 (JSON)" required><a-textarea v-model:value="form.write_scope_json" :rows="3" /></a-form-item>
+      <a-form-item label="附加配置 (JSON)"><a-textarea v-model:value="form.config_json" :rows="5" placeholder="provider 字段映射、超时和并发限制" /></a-form-item>
+      <template v-if="form.connector_type === 'feishu_bitable_crm'">
+        <a-alert type="info" message="先保存停用草稿、Base 标识和完整应用凭据，再读取表目录；选择表并保存后，可读取字段并配置调用参数名。" />
+        <a-button :disabled="!isEdit" :loading="metadataLoading" @click="loadMetadata">读取表和字段目录</a-button>
+        <a-alert v-if="metadataError" type="error" :message="metadataError" />
+        <template v-for="kind in ['customer', 'opportunity']" :key="kind">
+          <a-form-item v-if="metadataTables.length" :label="kind === 'customer' ? '客户表' : '商机表'">
+            <a-select :value="metadataConfig[kind + '_table_id']" :options="metadataTables.map(table => ({ value: table.table_id, label: table.name }))" @change="selectMetadataTable(kind, $event)" />
+          </a-form-item>
+          <div v-for="field in metadataFields[metadataConfig[kind + '_table_id']] || []" :key="kind + field.field_id" class="metadata-field-row">
+            <a-checkbox :checked="selectedField(kind, field)" :disabled="!supportedFieldTypes.includes(field.type)" @change="toggleField(kind, field, $event.target.checked)">
+              {{ field.field_name }}（{{ fieldTypeLabels[field.type] || '不支持写入' }}）
+            </a-checkbox>
+            <a-input v-if="selectedField(kind, field)" :value="logicalFieldName(kind, field)" placeholder="调用参数名" @change="renameField(kind, field, $event.target.value)" />
           </div>
-        </a-form-item>
+        </template>
       </template>
-
-      <template v-if="form.auth_type === 'basic_auth'">
-        <a-form-item label="用户名">
-          <a-input v-model:value="credentialValues.username" placeholder="用户名" />
-        </a-form-item>
-        <a-form-item label="密码">
-          <a-input-password
-            v-model:value="credentialValues.password"
-            placeholder="输入密码（留空保持不变）"
-          />
-        </a-form-item>
-      </template>
-
-      <template v-if="form.auth_type === 'oauth2_client'">
-        <a-form-item label="Token URL">
-          <a-input v-model:value="credentialValues.token_url" placeholder="https://..." />
-        </a-form-item>
-        <a-form-item label="Client ID">
-          <a-input v-model:value="credentialValues.client_id" placeholder="Client ID" />
-        </a-form-item>
-        <a-form-item label="Client Secret">
-          <a-input-password
-            v-model:value="credentialValues.client_secret"
-            placeholder="输入 Client Secret（留空保持不变）"
-          />
-        </a-form-item>
-        <a-form-item label="Scope（可选）">
-          <a-input v-model:value="credentialValues.scope" placeholder="space-separated scopes" />
-        </a-form-item>
-      </template>
-
-      <template v-if="form.auth_type === 'api_key'">
-        <a-form-item label="Header 名称">
-          <a-input v-model:value="credentialValues.api_key_header" placeholder="X-API-Key" />
-        </a-form-item>
-        <a-form-item label="API Key">
-          <a-input-password
-            v-model:value="credentialValues.api_key_value"
-            placeholder="输入 API Key（留空保持不变）"
-          />
-        </a-form-item>
-      </template>
-
-      <a-divider>目标地址</a-divider>
-
-      <a-form-item label="Base URL">
-        <a-input v-model:value="form.base_url" placeholder="https://api.example.com" />
+      <a-divider>认证配置</a-divider>
+      <a-form-item v-if="form.connector_type === 'generic_rest'" label="认证方式">
+        <a-select v-model:value="form.auth_type">
+          <a-select-option value="none">无</a-select-option><a-select-option value="bearer">Bearer Token</a-select-option>
+          <a-select-option value="basic">Basic Auth</a-select-option><a-select-option value="api_key">API Key</a-select-option>
+        </a-select>
       </a-form-item>
-
-      <a-form-item label="标签">
-        <a-select
-          v-model:value="form.tags"
-          mode="tags"
-          placeholder="输入标签后回车"
-        />
+      <a-form-item v-for="key in credentialKeys" :key="key" :label="key">
+        <a-input-password v-model:value="credentialValues[key]" placeholder="留空保持原值；新值只写入加密凭据" />
+        <div v-if="existingKeys.includes(key)" class="credential-hint">已配置，留空保持当前值</div>
+      </a-form-item>
+      <a-form-item v-if="existingKeys.length" label="删除已有凭据">
+        <a-checkbox-group v-model:value="deleteKeys" :options="existingKeys" />
       </a-form-item>
     </a-form>
   </a-modal>
@@ -123,179 +55,123 @@
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import {
-  createConnector,
-  updateConnector,
-  patchCredentials,
-} from '@/apis/connector_api'
-
-const TYPE_LABELS = {
-  generic_rest: '通用 REST',
-  salesforce: 'Salesforce',
-  feishu_bitable_crm: '飞书多维表格',
-}
-
-const props = defineProps({
-  open: Boolean,
-  connector: Object,
-  connectorTypes: { type: Array, default: () => [] },
-})
-
+import { createConnector, updateConnector, discoverConnectorMetadata } from '@/apis/connector_api'
+import { connectorPayload, parseObject } from '@/utils/connector_forms'
+const TYPE_LABELS = { generic_rest: '通用 REST', salesforce: 'Salesforce', feishu_bitable_crm: '飞书多维表格' }
+const props = defineProps({ open: Boolean, connector: Object, connectorTypes: { type: Array, default: () => [] } })
 const emit = defineEmits(['update:open', 'saved'])
-
 const isEdit = computed(() => !!props.connector?.slug)
 const saving = ref(false)
-
-const form = reactive({
-  name: '',
-  slug: '',
-  connector_type: '',
-  description: '',
-  enabled: true,
-  auth_type: 'none',
-  base_url: '',
-  tags: [],
+const revision = ref(null)
+const deleteKeys = ref([])
+const metadataLoading = ref(false)
+const metadataError = ref('')
+const metadataTables = ref([])
+const metadataFields = ref({})
+let metadataGeneration = 0
+const supportedFieldTypes = [1, 2, 3, 4, 5, 7, 18, 21]
+const fieldTypeLabels = { 1: '文本', 2: '数字', 3: '单选', 4: '多选', 5: '日期', 7: '复选框', 18: '关联', 21: '双向关联' }
+const credentialValues = reactive({})
+const form = reactive({ name: '', slug: '', connector_type: '', description: '', enabled: true,
+  auth_type: 'none', base_url: '', config_json: '{}', allowed_origins_text: '', allowed_private_cidrs_text: '',
+  read_scope_json: '{"access_level":"deny"}', write_scope_json: '{"access_level":"deny"}' })
+const metadataConfig = computed(() => { try { return parseObject(form.config_json, '附加配置') } catch { return {} } })
+const existingKeys = computed(() => (props.connector?.credential_keys || []).map(item => typeof item === 'string' ? item : item.key))
+const credentialKeys = computed(() => {
+  if (form.connector_type === 'generic_rest') return { none: [], bearer: ['token'], basic: ['username', 'password'], api_key: ['api_key'] }[form.auth_type] || []
+  return props.connectorTypes.find(type => type.type === form.connector_type)?.credential_keys || []
 })
-
-const credentialValues = reactive({
-  token: '',
-  username: '',
-  password: '',
-  token_url: '',
-  client_id: '',
-  client_secret: '',
-  scope: '',
-  api_key_header: 'X-API-Key',
-  api_key_value: '',
+watch(() => props.open, value => {
+  metadataGeneration++
+  metadataLoading.value = false
+  if (!value) return
+  const connector = props.connector || {}
+  const { base_url = '', auth_type = 'none', allowed_origins = [], allowed_private_cidrs = [], ...extra } = connector.config || {}
+  Object.assign(form, { name: connector.name || '', slug: connector.slug || '', connector_type: connector.connector_type || '',
+    description: connector.description || '', enabled: connector.enabled !== false, base_url, auth_type,
+    allowed_origins_text: allowed_origins.join('\n'), allowed_private_cidrs_text: allowed_private_cidrs.join('\n'),
+    config_json: JSON.stringify(extra, null, 2), read_scope_json: JSON.stringify(connector.read_scope || { access_level: 'deny' }, null, 2),
+    write_scope_json: JSON.stringify(connector.write_scope || { access_level: 'deny' }, null, 2) })
+  revision.value = connector.revision
+  metadataTables.value = []
+  metadataFields.value = {}
+  metadataError.value = ''
+  clearCredentials()
 })
-
-const existingCredentials = computed(() => {
-  if (!props.connector?.credential_keys) return []
-  return props.connector.credential_keys
-})
-
-function hasExistingCredential(key) {
-  return existingCredentials.value.includes(key)
+function clearCredentials() { for (const key of Object.keys(credentialValues)) delete credentialValues[key]; deleteKeys.value = [] }
+function handleClose() { metadataGeneration++; clearCredentials(); emit('update:open', false) }
+async function loadMetadata() {
+  const saved = props.connector?.config || {}
+  const draft = metadataConfig.value
+  if (['app_token', 'customer_table_id', 'opportunity_table_id'].some(key => draft[key] !== saved[key]) || Object.values(credentialValues).some(Boolean)) {
+    message.warning('请先保存 Base、所选表和凭据，再读取目录'); return
+  }
+  metadataLoading.value = true
+  const generation = ++metadataGeneration
+  metadataError.value = ''
+  try {
+    const response = await discoverConnectorMetadata(props.connector.slug)
+    if (generation !== metadataGeneration) return
+    metadataTables.value = response.data.tables
+    metadataFields.value = response.data.fields
+  } catch (error) { if (generation === metadataGeneration) metadataError.value = error.message || '读取目录失败，请检查凭据和应用访问权限' }
+  finally { if (generation === metadataGeneration) metadataLoading.value = false }
 }
-
-watch(
-  () => props.open,
-  (val) => {
-    if (val && props.connector) {
-      form.name = props.connector.name || ''
-      form.slug = props.connector.slug || ''
-      form.connector_type = props.connector.connector_type || ''
-      form.description = props.connector.description || ''
-      form.enabled = props.connector.enabled !== false
-      form.auth_type = props.connector.auth_type || 'none'
-      form.base_url = props.connector.base_url || ''
-      form.tags = props.connector.tags || []
-      // 清空凭据输入
-      Object.keys(credentialValues).forEach((k) => { credentialValues[k] = '' })
-    } else if (val) {
-      Object.assign(form, {
-        name: '', slug: '', connector_type: '', description: '',
-        enabled: true, auth_type: 'none', base_url: '', tags: [],
-      })
-      Object.keys(credentialValues).forEach((k) => { credentialValues[k] = '' })
-    }
-  },
-)
-
-function handleClose() {
-  emit('update:open', false)
+function selectMetadataTable(kind, id) {
+  metadataGeneration++
+  metadataLoading.value = false
+  const config = { ...metadataConfig.value, [kind + '_table_id']: id, [kind + '_fields']: {}, [kind + '_field_types']: {} }
+  form.config_json = JSON.stringify(config, null, 2)
+  metadataFields.value = {}
 }
-
+function logicalFieldName(kind, field) {
+  return Object.entries(metadataConfig.value[kind + '_fields'] || {}).find(([, id]) => id === field.field_id || id === field.field_name)?.[0] || field.field_id
+}
+function selectedField(kind, field) {
+  return Object.values(metadataConfig.value[kind + '_fields'] || {}).some(id => id === field.field_id || id === field.field_name)
+}
+function toggleField(kind, field, checked) {
+  const config = { ...metadataConfig.value }
+  const fields = { ...(config[kind + '_fields'] || {}) }
+  const types = { ...(config[kind + '_field_types'] || {}) }
+  const name = logicalFieldName(kind, field)
+  if (checked) { fields[name] = field.field_id; types[name] = field.type }
+  else { delete fields[name]; delete types[name] }
+  form.config_json = JSON.stringify({ ...config, [kind + '_fields']: fields, [kind + '_field_types']: types }, null, 2)
+}
+function renameField(kind, field, name) {
+  if (!name.trim() || name === 'runtime') { message.warning('请填写有效调用参数名'); return }
+  const config = { ...metadataConfig.value }
+  const fields = { ...(config[kind + '_fields'] || {}) }
+  const types = { ...(config[kind + '_field_types'] || {}) }
+  const old = logicalFieldName(kind, field)
+  if (name !== old && fields[name]) { message.warning('调用参数名已存在'); return }
+  delete fields[old]; delete types[old]
+  fields[name] = field.field_id; types[name] = field.type
+  form.config_json = JSON.stringify({ ...config, [kind + '_fields']: fields, [kind + '_field_types']: types }, null, 2)
+}
 async function handleSave() {
-  if (!form.name || !form.slug || !form.connector_type) {
-    message.warning('请填写名称、标识和类型')
-    return
-  }
-  if (!isEdit.value && !/^[a-z0-9_-]+$/.test(form.slug)) {
-    message.warning('标识只能包含小写字母、数字、下划线和连字符')
-    return
-  }
-
+  if (!form.name || !form.slug || !form.connector_type || !form.base_url) { message.warning('请填写名称、标识、类型和 Base URL'); return }
+  let payload
+  try { payload = connectorPayload(form, isEdit.value ? { revision: revision.value } : null) } catch (error) { message.error(error.message); return }
+  const upsert = Object.fromEntries(Object.entries(credentialValues).filter(([key, value]) => credentialKeys.value.includes(key) && value))
   saving.value = true
   try {
-    const payload = {
-      name: form.name,
-      slug: form.slug,
-      connector_type: form.connector_type,
-      description: form.description,
-      enabled: form.enabled,
-      auth_type: form.auth_type,
-      base_url: form.base_url,
-      tags: form.tags,
-    }
-
-    let result
-    if (isEdit.value) {
-      result = await updateConnector(props.connector.slug, payload)
-    } else {
-      result = await createConnector(payload)
-    }
-
-    if (!result.success) {
-      message.error(result.message || '保存失败')
-      return
-    }
-
-    // 保存凭据（如果有填写）
-    const credPayload = buildCredentialPayload()
-    if (Object.keys(credPayload).length > 0) {
-      const credResult = await patchCredentials(form.slug, credPayload)
-      if (!credResult.success) {
-        message.warning('连接器已保存，但凭据更新失败：' + (credResult.message || ''))
-        emit('saved')
-        return
-      }
-    }
-
+    if (!isEdit.value) payload.credentials = upsert
+    else if (Object.keys(upsert).length || deleteKeys.value.length) payload.credential_patch = { upsert, delete_keys: deleteKeys.value }
+    const result = isEdit.value ? await updateConnector(form.slug, payload) : await createConnector(payload)
+    revision.value = result.data.revision
+    clearCredentials()
     message.success(isEdit.value ? '连接器已更新' : '连接器已创建')
     emit('saved')
-  } catch (err) {
-    message.error(err.message || '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-function buildCredentialPayload() {
-  const cred = {}
-  switch (form.auth_type) {
-    case 'bearer_token':
-      if (credentialValues.token) cred.token = credentialValues.token
-      break
-    case 'basic_auth':
-      if (credentialValues.username) cred.username = credentialValues.username
-      if (credentialValues.password) cred.password = credentialValues.password
-      break
-    case 'oauth2_client':
-      if (credentialValues.token_url) cred.token_url = credentialValues.token_url
-      if (credentialValues.client_id) cred.client_id = credentialValues.client_id
-      if (credentialValues.client_secret) cred.client_secret = credentialValues.client_secret
-      if (credentialValues.scope) cred.scope = credentialValues.scope
-      break
-    case 'api_key':
-      if (credentialValues.api_key_header) cred.api_key_header = credentialValues.api_key_header
-      if (credentialValues.api_key_value) cred.api_key_value = credentialValues.api_key_value
-      break
-  }
-  return cred
+  } catch (error) { message.error(error.message || '保存失败') } finally { saving.value = false }
 }
 </script>
 
-<style lang="less" scoped>
-.connector-config-form {
-  max-height: 60vh;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.credential-hint {
-  margin-top: 4px;
-  color: var(--gray-500);
-  font-size: 12px;
-}
+<style scoped>
+.connector-config-form { max-height: 68vh; overflow-y: auto; padding-right: 8px; }
+.credential-hint { margin-top: 4px; color: var(--gray-500); font-size: 12px; }
+.metadata-field-row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+.metadata-field-row .ant-input { max-width: 180px; }
+@media (max-width: 600px) { .metadata-field-row { flex-wrap: wrap; } }
 </style>

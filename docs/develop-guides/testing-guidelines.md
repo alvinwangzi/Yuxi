@@ -108,6 +108,15 @@ docker compose exec api uv run ruff check package
 docker compose exec api uv run ruff format package --check
 ```
 
+根初始化脚本使用原生流程验证，不加入需要 API 容器仓库布局的 backend unit：
+
+```bash
+uv run --project backend --group test python scripts/test_connector_init.py
+pwsh -NoProfile -File scripts/test_init_security.ps1
+```
+
+Bash guard 需要 Bash/OpenSSL；Windows guard 使用 PowerShell。两者只生成本例临时 `.env`，验证首次生成、幂等、半配对拒绝与不输出密钥；CI 分别在 Linux 和 Windows 的原生 job 执行。
+
 也可以从仓库根目录使用脚本：
 
 ```bash

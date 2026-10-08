@@ -249,6 +249,21 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml \
 4. 真实登录、对话和文件操作：确认业务链路。
 5. 知识库、OCR、Langfuse 等可选能力：单独检查其配置和外部服务。
 
+### 连接器密钥与 Schema
+
+`init.sh` 和 `init.ps1` 只在当前 key/key_id 均缺省时生成 Fernet 配置；已有值不覆盖，半配对配置失败并保留原值。密钥通过受保护环境注入 API、worker 与迁移器，不能提交到仓库、日志或 Agent 沙盒。启用连接器或存在保留密文时，`/api/system/ready` 的 `connector_vault` 必须通过 key 覆盖和有界解密检查。
+
+Business Schema v21 由 storage-migrator 升级连接器 UTC 时间、调用 UUID 列和账本约束，类型、约束与 v21 版本事实在同一事务提交。历史 naive 时间按 UTC 解释。迁移不伪造缺失身份或不可恢复的审批；无效旧行保留，并仅记录约束名和数量。此类约束保持 `NOT VALID`，但拒绝新的无效写入。旧行需要在维护窗口内核对和处理，不能直接更新后重发；在旧行仍需旧 key 解密时，不得移除旧 key ring。
+
+轮换前备份数据库，并同时装配新当前 key/key_id 与 `CREDENTIAL_ENCRYPTION_OLD_KEYS_JSON`。先执行只读预检，再执行分批轮换：
+
+```bash
+docker compose exec -T api python scripts/rotate_connector_keys.py --dry-run --batch-size 100
+docker compose exec -T api python scripts/rotate_connector_keys.py --batch-size 100
+```
+
+公开 rotation service 对所有保留 credentials、params、snapshot 和 result 进行 keyset 分批处理，终态记录也参与；每行密文共享同一 key_id，每批事务原子提交。损坏密文或未处理的历史约束冲突使当前批回滚并非零退出，不能跳过后宣称完成。核对 key 分布、readiness 和真实业务回读后，才能移除不再被保留材料引用的旧 key。外部 write 无法随数据库回滚，unknown 核对和 Salesforce/飞书测试组织的真实 read/write/readback 仍是独立验收。
+
 ## 第三方组件和许可证
 
 Yuxi 本体使用 MIT License。Compose 依赖以独立进程运行，Yuxi 通过公开协议访问它们；第三方组件的许可证不会因为使用 Compose 就变成 MIT。

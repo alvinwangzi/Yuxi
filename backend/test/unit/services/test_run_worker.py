@@ -1141,6 +1141,7 @@ async def test_finish_run_terminal_loser_does_not_append_end_event(monkeypatch: 
     monkeypatch.setattr(run_worker, "mark_run_terminal", fake_mark_terminal)
     monkeypatch.setattr(run_worker, "append_run_event", fake_append_event)
     monkeypatch.setattr(run_worker, "_get_run", AsyncMock(return_value=None))
+    monkeypatch.setattr(run_worker, "_read_run_token_usage_from_state", AsyncMock(return_value=None))
 
     transition = await run_worker._finish_run(
         "run-1",
@@ -1445,6 +1446,9 @@ async def test_run_context_fails_closed_when_terminal_attempt_check_fails(monkey
 
 @pytest.mark.asyncio
 async def test_worker_startup_ensures_builtin_mcp_servers(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("yuxi.services.connectors.vault_readiness.require_connector_vault_ready", AsyncMock())
+    monkeypatch.setattr("yuxi.services.workflow_service.recover_workflow_runs", AsyncMock())
+    monkeypatch.setattr("yuxi.services.connectors.recovery.recover_stale_leases", AsyncMock())
     calls: list[str] = []
 
     def fake_initialize():
@@ -1647,6 +1651,7 @@ async def test_reconciliation_failure_does_not_refresh_success_lease(monkeypatch
 
 @pytest.mark.asyncio
 async def test_worker_startup_fails_when_system_options_cannot_initialize(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("yuxi.services.connectors.vault_readiness.require_connector_vault_ready", AsyncMock())
 
     monkeypatch.setattr(run_worker.pg_manager, "initialize", lambda: None)
     monkeypatch.setattr(run_worker.pg_manager, "require_current_schema", AsyncMock())

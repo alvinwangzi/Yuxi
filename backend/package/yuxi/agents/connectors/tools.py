@@ -9,65 +9,12 @@ connector/operation 标识，执行时从 runtime 获取 uid/run_id/request_id�
 from __future__ import annotations
 
 import json
-import uuid
+import copy
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt.tool_node import ToolRuntime
-from pydantic import create_model
-
-from yuxi.utils import logger
-
-_MAX_SLUG_LEN = 40
-
-_JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
-    "string": str,
-    "integer": int,
-    "number": float,
-    "boolean": bool,
-    "array": list,
-    "object": dict,
-}
-
-
-def _sanitize_slug(slug: str, max_len: int = _MAX_SLUG_LEN) -> str:
-    return slug.replace("-", "_").replace(".", "_")[:max_len]
-
-
-def _build_args_schema(request_schema: dict | None) -> type:
-    """从 operation 的 JSON Schema 动态构建 Pydantic model。"""
-    if not request_schema:
-        return create_model("ConnectorParamsEmpty")
-
-    properties = request_schema.get("properties", {})
-    required_fields = set(request_schema.get("required", []))
-    field_definitions: dict[str, Any] = {}
-
-    for name, prop in properties.items():
-        json_type = prop.get("type", "string")
-        python_type = _JSON_SCHEMA_TYPE_MAP.get(json_type, Any)
-        description = prop.get("description", "")
-        if name in required_fields:
-            field_definitions[name] = (python_type, ...)
-        else:
-            field_definitions[name] = (python_type | None, None)
-
-    return create_model("ConnectorParams", **field_definitions)
-
-
-def _format_tool_result(result: dict) -> str:
-    output: dict[str, Any] = {"invocation_id": result.get("invocation_id")}
-    if result.get("mapped_result"):
-        output["result"] = result["mapped_result"]
-    elif result.get("data") is not None:
-        output["result"] = result["data"]
-    if result.get("error_code"):
-        output["error_code"] = result["error_code"]
-    if result.get("error_message"):
-        output["error_message"] = result["error_message"]
-    if result.get("remote_outcome"):
-        output["remote_outcome"] = result["remote_outcome"]
-    return json.dumps(output, ensure_ascii=False, default=str)
+from langgraph.types import interrupt
 
 
 async def get_connector_tools(context: Any) -> list[StructuredTool]:
@@ -88,25 +35,26 @@ async def get_connector_tools(context: Any) -> list[StructuredTool]:
     uid = str(getattr(context, "uid", "") or "")
 
     for connector_slug in connector_slugs:
-        try:
-            connector_meta = await service.get_connector_metadata(connector_slug, uid=uid)
-        except Exception as exc:
-            logger.warning(f"连接器 '{connector_slug}' 加载失败: {exc}")
-            continue
+        connector_meta = await service.get_connector_metadata(connector_slug, uid=uid)
 
         if connector_meta is None:
-            logger.warning(f"连接器 '{connector_slug}' 不存在或已停用")
-            continue
+            raise ValueError("configured_connector_unavailable")
 
         operations = connector_meta.get("operations", [])
         for op in operations:
-            tool = _build_single_tool(service, connector_slug, op, context)
+            if (
+                getattr(context, "is_subagent_runtime", False)
+                and op.get("operation_type") == "write"
+                and op.get("approval_policy", "required") == "required"
+            ):
+                continue
+            tool = build_connector_operation_tool(service, connector_slug, op, context)
             tools.append(tool)
 
     return tools
 
 
-def _build_single_tool(
+def build_connector_operation_tool(
     service: Any,
     connector_slug: str,
     op: dict[str, Any],
@@ -130,31 +78,34 @@ def _build_single_tool(
 
     async def _tool_func(
         runtime: ToolRuntime,
-        tool_call_id: str = "",
         **params: Any,
     ) -> str:
         runtime_ctx = getattr(runtime, "context", None)
+        if (
+            getattr(runtime_ctx, "is_subagent_runtime", False)
+            and operation_type == "write"
+            and op.get("approval_policy", "required") == "required"
+        ):
+            raise ValueError("subagent_connector_approval_unavailable")
         uid = str(getattr(runtime_ctx, "uid", "") or "")
         run_id = str(getattr(runtime_ctx, "run_id", "") or "")
         request_id = str(getattr(runtime_ctx, "request_id", "") or "")
+        tool_call_id = runtime.tool_call_id
+        if not uid or not run_id or not request_id or not tool_call_id:
+            raise ValueError("connector_runtime_identity_required")
 
-        from yuxi.services.connectors.base import ConnectorExecution
         from yuxi.services.connectors.service import (
             ConnectorApprovalRequired,
             ConnectorServiceError,
         )
 
-        execution = ConnectorExecution(
-            invocation_id=str(uuid.uuid4()),
+        execution = await service.resolve_agent_execution(
             actor_uid=uid,
-            consumer_type="agent",
-            logical_call_key=f"agent:{request_id}:{tool_call_id or uuid.uuid4()}",
+            current_run_id=run_id,
+            request_id=request_id,
+            tool_call_id=tool_call_id,
             connector_revision=bound_connector_revision,
             operation_revision=bound_operation_revision,
-            agent_slug=None,
-            agent_request_id=request_id,
-            agent_run_id=run_id,
-            tool_call_id=tool_call_id,
         )
 
         try:
@@ -164,30 +115,55 @@ def _build_single_tool(
                 params,
                 execution=execution,
             )
-            return _format_tool_result(result)
         except ConnectorApprovalRequired as exc:
-            return json.dumps({
-                "invocation_id": exc.invocation_id,
-                "status": "awaiting_approval",
-                "message": "写操作需要审批，已提交审批请求。",
-            }, ensure_ascii=False)
+            interrupt(
+                {
+                    "type": "connector_approval",
+                    "invocation_id": exc.invocation_id,
+                    "digest": exc.digest,
+                    "status": "awaiting_approval",
+                    "message": "写操作需要审批，已提交审批请求。",
+                    "request_summary": exc.summary,
+                }
+            )
+            result = await service.prepare_and_execute(
+                bound_connector_slug,
+                bound_operation_slug,
+                params,
+                execution=execution,
+            )
         except ConnectorServiceError as exc:
-            return json.dumps({
-                "error": True, "error_code": exc.code, "error_message": str(exc),
-            }, ensure_ascii=False)
-        except Exception as exc:
-            logger.warning(f"连接器工具执行异常: {exc}")
-            return json.dumps({
-                "error": True, "error_code": "execution_error",
-                "error_message": str(exc)[:500],
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "error": True,
+                    "error_code": exc.code,
+                    "error_message": str(exc),
+                },
+                ensure_ascii=False,
+            )
+        while result.get("remote_outcome") == "unknown" and operation_type == "write":
+            invocation = await service.get_user_invocation(result["invocation_id"], actor=uid)
+            interrupt(
+                {
+                    "type": "connector_approval",
+                    "invocation_id": result["invocation_id"],
+                    "digest": invocation["request_digest"],
+                    "status": "unknown",
+                    "message": "远端写入结果未知，需要人工核对后恢复。",
+                    "request_summary": invocation["request_summary"],
+                }
+            )
+            result = await service.prepare_and_execute(
+                bound_connector_slug, bound_operation_slug, params, execution=execution
+            )
+        return format_connector_tool_result(result)
 
     op_type_label = "写入" if operation_type == "write" else "查询"
     description = f"{operation_name}（{http_method} {op_type_label}操作）"
 
-    safe_conn = _sanitize_slug(bound_connector_slug)
-    safe_op = _sanitize_slug(bound_operation_slug)
-    tool_name = f"cn_{safe_conn}__{safe_op}"
+    from yuxi.services.connectors.schemas import validate_operation_namespace
+
+    tool_name = validate_operation_namespace(bound_connector_slug, bound_operation_slug)
 
     return StructuredTool.from_function(
         name=tool_name,
@@ -195,3 +171,26 @@ def _build_single_tool(
         coroutine=_tool_func,
         args_schema=args_schema,
     )
+
+
+def format_connector_tool_result(result: dict) -> str:
+    """将绑定调用结果转换为稳定工具 JSON，不交付私有 provider evidence。"""
+    output: dict[str, Any] = {"invocation_id": result.get("invocation_id")}
+    if result.get("mapped_result") is not None:
+        output["result"] = result["mapped_result"]
+    elif result.get("data") is not None:
+        output["result"] = result["data"]
+    if result.get("error_code"):
+        output["error_code"] = result["error_code"]
+    if result.get("error_message"):
+        output["error_message"] = result["error_message"]
+    if result.get("remote_outcome"):
+        output["remote_outcome"] = result["remote_outcome"]
+    return json.dumps(output, ensure_ascii=False, default=str)
+
+
+def _build_args_schema(request_schema: dict | None) -> dict:
+    """保留完整约束和原始类型；runtime 由 ToolNode 独立注入。"""
+    if request_schema and "runtime" in request_schema.get("properties", {}):
+        raise ValueError("runtime 是受信任工具注入的保留参数")
+    return copy.deepcopy(request_schema or {"type": "object", "properties": {}})

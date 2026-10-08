@@ -25,7 +25,9 @@ class ConnectorResult:
     provider_request_id: str | None = None
     response_status: int | None = None
     duration_ms: float = 0.0
-    mapped_result: dict[str, Any] = field(default_factory=dict)
+    mapped_result: dict[str, Any] | None = None
+    provider_evidence: Any = field(default=None, repr=False)
+    retry_after_seconds: float | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,8 @@ class ConnectorExecution:
     step_id: str | None = None
     step_execution_id: str | None = None
     tool_call_id: str | None = None
+    current_agent_run_id: str | None = None
+    workflow_owner_attempt: str | None = None
 
 
 class BaseConnectorAdapter(ABC):
@@ -84,7 +88,14 @@ class BaseConnectorAdapter(ABC):
             "config_schema": cls.config_schema(),
             "credential_keys": cls.credential_keys(),
             "capabilities": cls.capabilities(),
+            "standard_operations": cls.standard_operations({}),
+            "healthcheck_operation_slug": "query_customer" if cls.connector_type != "generic_rest" else None,
         }
+
+    @classmethod
+    def standard_operations(cls, config: dict) -> list[dict]:
+        """默认无预置操作，SaaS 子类声明可保存的操作目录。"""
+        return []
 
     @classmethod
     def config_schema(cls) -> dict:
@@ -117,16 +128,3 @@ class BaseConnectorAdapter(ABC):
         ``params`` 为已校验的业务参数。
         """
         ...
-
-    async def probe(
-        self,
-        *,
-        http_config: ConnectorHTTPConfig,
-        credentials: dict[str, bytes],
-        healthcheck_operation_slug: str | None = None,
-    ) -> dict[str, Any]:
-        """连接测试，分层返回网络/认证/操作结果。
-
-        默认实现尝试执行 healthcheck 操作；子类可覆盖以提供更精细的探测。
-        """
-        return {"status": "not_implemented"}

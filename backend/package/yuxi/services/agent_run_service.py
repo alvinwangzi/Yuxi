@@ -658,6 +658,16 @@ async def prepare_agent_run_creation_scope(
     if not conversation_thread_id:
         raise HTTPException(status_code=422, detail="conversation_thread_id 不能为空")
 
+    if run_type == "resume" and created_by_run_id:
+        source_run = await AgentRunRepository(db).get_run_for_user(created_by_run_id, str(current_uid))
+        if source_run is not None and source_run.source == "workflow":
+            from yuxi.repositories.workflow_repository import WorkflowRepository
+
+            try:
+                await WorkflowRepository(db).require_agent_resume_owner(source_run, str(current_uid), request_id)
+            except PermissionError:
+                raise HTTPException(status_code=409, detail="workflow_agent_resume_unavailable") from None
+
     conversation = await ConversationRepository(db).lock_conversation_by_thread_id(conversation_thread_id)
     if not conversation or conversation.uid != str(current_uid) or conversation.status == "deleted":
         raise HTTPException(status_code=404, detail="对话线程不存在")
@@ -850,6 +860,7 @@ async def request_cancel_agent_run(
     current_uid: str,
     db: AsyncSession,
     cascade_children: bool = False,
+    close_interrupted: bool = False,
 ):
     """请求取消一个 run，并可同时向仍活跃的子 run 发布取消信号。"""
     repo = AgentRunRepository(db)
@@ -857,6 +868,7 @@ async def request_cancel_agent_run(
         run_id=run_id,
         uid=str(current_uid),
         cascade_descendants=cascade_children,
+        close_interrupted=close_interrupted,
     )
     if run is None:
         raise HTTPException(status_code=404, detail="运行任务不存在")

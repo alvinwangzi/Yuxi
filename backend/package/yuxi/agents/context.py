@@ -501,7 +501,7 @@ async def resolve_agent_resource_options(
     if "connectors" in fields_to_load:
         from yuxi.repositories.connector_repository import ConnectorRepository
 
-        connectors = await ConnectorRepository(db).list_usable(user)
+        connectors = await ConnectorRepository(db).list_usable(uid=str(user.uid))
         options["connectors"] = [
             _resource_option(connector.slug, connector.name, connector.description)
             for connector in connectors

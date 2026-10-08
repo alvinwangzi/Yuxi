@@ -381,7 +381,10 @@ class _CreateRunRepo:
 
     async def get_run_for_user(self, run_id: str, uid: str):
         assert uid == "user-1"
-        return self.db.runs_by_id.get(run_id)
+        run = self.db.runs_by_id.get(run_id)
+        if run is not None and not hasattr(run, "source"):
+            run.source = "chat"
+        return run
 
     async def get_latest_chat_or_resume_run(self, *, uid: str, agent_slug: str, conversation_thread_id: str):
         assert uid == "user-1"
@@ -1863,7 +1866,8 @@ async def test_cancel_agent_run_view_cascades_children(monkeypatch: pytest.Monke
         def __init__(self, db):
             self.db = db
 
-        async def request_cancel_execution_tree(self, *, run_id: str, uid: str, cascade_descendants: bool):
+        async def request_cancel_execution_tree(self, *, run_id: str, uid: str, cascade_descendants: bool, close_interrupted: bool = False):
+            assert not close_interrupted
             assert run_id == "parent-run"
             assert uid == "user-1"
             assert cascade_descendants is True

@@ -56,7 +56,7 @@ def _patch_getaddrinfo(monkeypatch, result):
             raise result
         return result
 
-    monkeypatch.setattr(url_fetcher.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
 async def test_resolve_dedupes_addresses(monkeypatch):

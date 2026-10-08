@@ -73,6 +73,16 @@ async def _run_probe(probe: Probe) -> dict[str, str]:
     return {"status": "ok"}
 
 
+async def _probe_connector_vault() -> dict:
+    """加密业务存在时 key 覆盖成为接流量前置条件。"""
+    from yuxi.services.connectors.vault_readiness import get_connector_vault_status
+
+    try:
+        return await asyncio.wait_for(get_connector_vault_status(), timeout=READINESS_PROBE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        return {"status": "error", "required": True, "code": type(exc).__name__}
+
+
 def _component_snapshot(components: dict[str, dict[str, Any]] | None) -> tuple:
     """把启动组件状态规整为缓存 key，不包含异常消息或其他敏感值。"""
 
@@ -93,10 +103,11 @@ def _component_snapshot(components: dict[str, dict[str, Any]] | None) -> tuple:
 async def _compute_readiness(*, startup_complete: bool, component_snapshot: tuple) -> dict[str, Any]:
     """执行一次真实探针并合并启动组件事实。"""
 
-    postgres, redis, worker = await asyncio.gather(
+    postgres, redis, worker, connector_vault = await asyncio.gather(
         _run_probe(_probe_postgres),
         _run_probe(_probe_redis),
         _run_probe(_probe_worker),
+        _probe_connector_vault(),
     )
     components = {
         name: {
@@ -106,6 +117,7 @@ async def _compute_readiness(*, startup_complete: bool, component_snapshot: tupl
         }
         for name, status, required, code in component_snapshot
     }
+    components["connector_vault"] = connector_vault
     checks = {
         "startup": {"status": "ok"} if startup_complete else {"status": "error", "code": "not_complete"},
         "postgres": postgres,
@@ -135,7 +147,14 @@ async def get_readiness(
     global _readiness_cache
 
     component_snapshot = _component_snapshot(startup_components)
-    cache_key = (startup_complete, component_snapshot, id(_probe_postgres), id(_probe_redis), id(_probe_worker))
+    cache_key = (
+        startup_complete,
+        component_snapshot,
+        id(_probe_postgres),
+        id(_probe_redis),
+        id(_probe_worker),
+        id(_probe_connector_vault),
+    )
     now = time.monotonic()
     if _readiness_cache is not None:
         cached_key, expires_at, cached_result = _readiness_cache

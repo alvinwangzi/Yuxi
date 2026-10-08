@@ -10,6 +10,14 @@ import {
   resolveToolApprovalMode
 } from '../../src/utils/toolApproval.js'
 
+test('连接器中断需要调用 ID 与 digest，且保持为用户待处理状态', () => {
+  const pending = { kind: 'connector', invocationId: 'invocation', digest: 'bound-digest' }
+  assert.equal(hasPendingInterruptPayload(pending), true)
+  assert.equal(isThreadWaitingForUserAction({ pendingInterrupt: pending }), true)
+  assert.equal(hasPendingInterruptPayload({ ...pending, digest: '' }), false)
+  assert.equal(hasPendingInterruptPayload({ ...pending, invocationId: null }), false)
+})
+
 test('tool approval modes and interrupt payloads follow their state contracts', () => {
   assert.equal(isToolApprovalMode('default'), true)
   assert.equal(isToolApprovalMode('always_trust'), true)

@@ -8,15 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from yuxi.utils import logger
-
 _REGISTRY: dict[str, type] = {}
 
 
 def register_adapter(connector_type: str, adapter_class: type) -> None:
-    """注册适配器类型；重复注册覆盖并发出警告。"""
+    """同类重复注册幂等，不同实现争用类型时明确拒绝。"""
     if connector_type in _REGISTRY and _REGISTRY[connector_type] is not adapter_class:
-        logger.warning(f"连接器类型 {connector_type} 重复注册，覆盖旧实现")
+        raise ValueError(f"连接器类型 {connector_type} 重复注册")
     _REGISTRY[connector_type] = adapter_class
 
 

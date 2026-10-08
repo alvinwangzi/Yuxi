@@ -7,6 +7,7 @@ from typing import Any
 
 from yuxi.utils.logging_config import logger
 from yuxi.workflows.executors import BaseStepExecutor
+from yuxi.workflows.context import WorkflowExecutionContext, WorkflowStepWaiting
 
 
 class ConnectorStepExecutor(BaseStepExecutor):
@@ -18,7 +19,7 @@ class ConnectorStepExecutor(BaseStepExecutor):
     - params: 业务参数（已模板替换）
     - output_key: 输出到 context 的 key
 
-    写操作需要审批时返回 waiting_approval 状态，由引擎层持久化后暂停；
+    写操作需要审批时发出专用等待控制信号，由引擎层持久化后暂停；
     审批通过后引擎从 pending_connector_invocation_id 恢复继续执行。
     """
 
@@ -32,11 +33,19 @@ class ConnectorStepExecutor(BaseStepExecutor):
         if not isinstance(params, dict):
             raise ValueError(f"connector 步骤 params 必须是对象，当前为 {type(params).__name__}")
 
-        workflow_id = context.get("__workflow_id__")
-        workflow_run_id = context.get("__workflow_run_id__")
-        step_id = step_data.get("id", "unknown")
-        step_execution_id = context.get("__step_execution_id__") or str(uuid.uuid4())
-        actor_uid = context.get("__actor_uid__", "")
+        execution_context = kwargs.get("execution_context")
+        if (
+            not isinstance(execution_context, WorkflowExecutionContext)
+            or not execution_context.actor_uid
+            or not execution_context.step_execution_id
+            or execution_context.step_id != step_data.get("id")
+        ):
+            raise ValueError("connector 步骤缺少可信执行上下文")
+        workflow_id = execution_context.workflow_id
+        workflow_run_id = execution_context.workflow_run_id
+        step_id = execution_context.step_id
+        step_execution_id = execution_context.step_execution_id
+        actor_uid = execution_context.actor_uid
 
         from yuxi.services.connectors.base import ConnectorExecution
         from yuxi.services.connectors.factory import get_connector_service
@@ -54,6 +63,7 @@ class ConnectorStepExecutor(BaseStepExecutor):
             workflow_run_id=workflow_run_id,
             step_id=step_id,
             step_execution_id=step_execution_id,
+            workflow_owner_attempt=execution_context.owner_attempt,
         )
 
         logger.info(f"连接器步骤 {step_id}: {connector_slug}/{operation_slug}")
@@ -65,15 +75,28 @@ class ConnectorStepExecutor(BaseStepExecutor):
                 connector_slug, operation_slug, params, execution=execution,
             )
         except ConnectorApprovalRequired as exc:
-            return {
-                "status": "waiting_approval",
-                "invocation_id": exc.invocation_id,
-                "connector_slug": connector_slug,
-                "operation_slug": operation_slug,
-                "step_id": step_id,
-            }
+            raise WorkflowStepWaiting(
+                "waiting_approval",
+                {
+                    "invocation_id": exc.invocation_id,
+                    "digest": exc.digest,
+                    "connector_slug": connector_slug,
+                    "operation_slug": operation_slug,
+                },
+            ) from None
         except ConnectorServiceError as exc:
             raise RuntimeError(f"连接器调用失败 [{exc.code}]: {exc}") from exc
+
+        if result.get("remote_outcome") == "unknown":
+            raise WorkflowStepWaiting(
+                "waiting_approval",
+                {
+                    "kind": "reconciliation",
+                    "invocation_id": result["invocation_id"],
+                    "connector_slug": connector_slug,
+                    "operation_slug": operation_slug,
+                },
+            )
 
         if not result.get("success") and result.get("error_code"):
             raise RuntimeError(
@@ -84,7 +107,7 @@ class ConnectorStepExecutor(BaseStepExecutor):
             "invocation_id": result.get("invocation_id"),
             "success": result.get("success", True),
         }
-        if result.get("mapped_result"):
+        if result.get("mapped_result") is not None:
             output["result"] = result["mapped_result"]
         elif result.get("data") is not None:
             output["result"] = result["data"]

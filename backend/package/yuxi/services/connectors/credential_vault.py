@@ -7,15 +7,16 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import os
 from dataclasses import dataclass
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from yuxi.utils import logger
-
 ENCRYPTION_KEY_ENV = "CREDENTIAL_ENCRYPTION_KEY"
 ENCRYPTION_KEY_ID_ENV = "CREDENTIAL_ENCRYPTION_KEY_ID"
+OLD_KEYS_ENV = "CREDENTIAL_ENCRYPTION_OLD_KEYS_JSON"
 
 
 class CredentialVaultError(Exception):
@@ -53,6 +54,7 @@ class CredentialVault:
         self._current_key = current_key
         self._current_key_id = current_key_id
         self._old_keys = dict(old_keys or {})
+        self._cache_identity = str(id(self))
 
     @classmethod
     def from_environment(cls) -> CredentialVault | None:
@@ -62,11 +64,39 @@ class CredentialVault:
         if not raw_key and not key_id:
             return None
         if not raw_key or not key_id:
-            raise CredentialVaultError(
-                f"{ENCRYPTION_KEY_ENV} 与 {ENCRYPTION_KEY_ID_ENV} 必须同时配置"
-            )
+            raise CredentialVaultError(f"{ENCRYPTION_KEY_ENV} 与 {ENCRYPTION_KEY_ID_ENV} 必须同时配置")
         fernet = _build_fernet(raw_key)
-        return cls(current_key=fernet, current_key_id=key_id)
+        try:
+            old_config = json.loads(os.getenv(OLD_KEYS_ENV, "{}") or "{}")
+        except json.JSONDecodeError:
+            raise CredentialVaultError("旧密钥配置必须为 JSON 对象") from None
+        if not isinstance(old_config, dict):
+            raise CredentialVaultError("旧密钥配置必须为 JSON 对象")
+        old_keys = {}
+        for old_id, old_key in old_config.items():
+            if not isinstance(old_id, str) or not old_id or not isinstance(old_key, str) or not old_key:
+                raise CredentialVaultError("旧密钥标识与密钥必须为非空字符串")
+            if old_id == key_id:
+                raise CredentialVaultError("旧密钥不得覆盖当前 key_id")
+            old_keys[old_id] = _build_fernet(old_key)
+        vault = cls(current_key=fernet, current_key_id=key_id, old_keys=old_keys)
+        vault._cache_identity = hashlib.sha256(
+            json.dumps(
+                [raw_key, key_id, old_config],
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return vault
+
+    @property
+    def supported_key_ids(self) -> frozenset[str]:
+        """返回覆盖范围，不返回密钥值。"""
+        return frozenset([self._current_key_id, *self._old_keys])
+
+    @property
+    def cache_identity(self) -> str:
+        """进程内探针缓存随实际 key ring 变化，不进入响应或日志。"""
+        return self._cache_identity
 
     @property
     def current_key_id(self) -> str:
@@ -111,13 +141,11 @@ def _build_fernet(raw_key: str) -> Fernet:
 
 def generate_key_bytes() -> str:
     """生成新的 32 字节随机密钥，返回 base64 编码字符串。"""
-    return base64.urlsafe_b64encode(Fernet.generate_key()).decode("utf-8")
+    return Fernet.generate_key().decode("utf-8")
 
 
 def ensure_vault_available(vault: CredentialVault | None) -> CredentialVault:
     """校验保险库已配置，未配置时抛出明确错误。"""
     if vault is None:
-        raise CredentialVaultError(
-            f"凭据保险库未配置；请设置 {ENCRYPTION_KEY_ENV} 和 {ENCRYPTION_KEY_ID_ENV}"
-        )
+        raise CredentialVaultError(f"凭据保险库未配置；请设置 {ENCRYPTION_KEY_ENV} 和 {ENCRYPTION_KEY_ID_ENV}")
     return vault

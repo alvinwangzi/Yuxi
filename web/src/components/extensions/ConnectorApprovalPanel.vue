@@ -17,7 +17,7 @@
           <div v-for="item in pendingItems" :key="item.invocation_id" class="approval-item">
             <div class="approval-item-header">
               <span class="approval-operation">{{ item.operation_slug }}</span>
-              <a-tag color="orange" :bordered="false">待审批</a-tag>
+              <a-tag color="orange" :bordered="false">{{ item.status === 'unknown' ? '等待核对' : '待审批' }}</a-tag>
             </div>
             <div class="approval-item-meta">
               <span>调用者: {{ item.actor_uid || '-' }}</span>
@@ -26,36 +26,72 @@
             <div v-if="item.request_digest" class="approval-digest">
               <pre>{{ formatDigest(item.request_digest) }}</pre>
             </div>
-            <div class="approval-item-actions">
-              <a-button type="primary" size="small" :loading="actionLoading === item.invocation_id" @click="approve(item)">
-                批准
-              </a-button>
-              <a-button danger size="small" :loading="actionLoading === item.invocation_id" @click="reject(item)">
-                拒绝
-              </a-button>
+            <div v-if="item.request_summary" class="approval-digest">
+              <div>连接器：{{ item.connector_slug }} · {{ item.request_summary.method }} {{ item.request_summary.endpoint_template }}</div>
+              <div>目标：{{ JSON.stringify(item.request_summary.targets || {}) }}</div>
+              <div>公开变更：{{ JSON.stringify(item.request_summary.changes || {}) }}</div>
+              <div>变更字段：{{ (item.request_summary.changed_fields || []).join('、') || '固定操作' }}</div>
+              <div>版本：连接器 {{ item.connector_revision }} / 操作 {{ item.operation_revision }}</div>
+              <div>有效期：{{ item.approval_expires_at ? formatTime(item.approval_expires_at) : '批准后开始计时' }}</div>
             </div>
+            <a-alert v-if="item.status === 'unknown'" type="warning" message="远端结局未知，暂停后续步骤；需管理员根据独立回查证据核对，不能直接重发。" />
+            <div v-if="item.status === 'unknown'" class="approval-item-actions">
+              <a-button v-if="userStore.isAdmin" size="small" @click="openReconciliation(item)">核对</a-button>
+              <span v-else>请联系管理员核对此调用</span>
+            </div>
+            <template v-else>
+              <a-alert v-if="!item.request_summary?.approval_ready" type="warning" message="审批摘要不完整，暂不能批准；请联系管理员" />
+              <div v-if="item.actor_uid !== userStore.uid">仅调用者本人可以决定此调用</div>
+              <div class="approval-item-actions">
+                <a-button type="primary" size="small" :loading="actionLoading === item.invocation_id" :disabled="item.actor_uid !== userStore.uid || !item.request_summary?.approval_ready" @click="approve(item)">
+                  批准
+                </a-button>
+                <a-button danger size="small" :loading="actionLoading === item.invocation_id" :disabled="item.actor_uid !== userStore.uid" @click="reject(item)">
+                  拒绝
+                </a-button>
+              </div>
+            </template>
           </div>
         </div>
       </a-spin>
     </div>
   </a-modal>
+  <ConnectorReconcileModal v-model:open="reconciliationOpen" :invocation="reconciliationItem" @resolved="handleResolved" />
 </template>
 
 <script setup>
 import { ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { getConnectorUsage, submitDecision } from '@/apis/connector_api'
+import { getConnectorUsage, getInvocation, submitDecision } from '@/apis/connector_api'
+import ConnectorReconcileModal from './ConnectorReconcileModal.vue'
 
+import { useUserStore } from '@/stores/user'
+const userStore = useUserStore()
 const props = defineProps({
   open: Boolean,
   connector: Object,
+  invocationIds: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['update:open'])
+const emit = defineEmits(['update:open', 'decided'])
 
 const loading = ref(false)
+let requestGeneration = 0
 const pendingItems = ref([])
 const actionLoading = ref('')
+const reconciliationOpen = ref(false)
+const reconciliationItem = ref(null)
+
+function openReconciliation(item) {
+  reconciliationItem.value = item
+  reconciliationOpen.value = true
+}
+
+async function handleResolved() {
+  reconciliationOpen.value = false
+  await fetchPending()
+  emit('decided', reconciliationItem.value)
+}
 
 function formatTime(t) {
   if (!t) return '-'
@@ -71,36 +107,49 @@ function formatDigest(digest) {
 }
 
 watch(
-  () => props.open,
-  (val) => {
-    if (val && props.connector?.slug) {
+  [() => props.open, () => props.connector?.slug, () => JSON.stringify(props.invocationIds)],
+  ([val]) => {
+    requestGeneration++
+    loading.value = false
+    pendingItems.value = []
+    if (val && (props.connector?.slug || props.invocationIds.length)) {
       fetchPending()
     }
   },
 )
 
 async function fetchPending() {
-  if (!props.connector?.slug) return
+  if (!props.connector?.slug && !props.invocationIds.length) return
   loading.value = true
+  const generation = ++requestGeneration
   try {
-    const result = await getConnectorUsage(props.connector.slug, { status: 'pending_approval' })
+    if (props.invocationIds.length) {
+      const results = await Promise.all(props.invocationIds.map(getInvocation))
+      if (generation !== requestGeneration) return
+      pendingItems.value = results.map(result => result.data).filter(item => ['awaiting_approval', 'unknown'].includes(item.status))
+      return
+    }
+    const result = await getConnectorUsage(props.connector.slug, { status: 'awaiting_approval' })
+    if (generation !== requestGeneration) return
     if (result.success) {
       pendingItems.value = result.data?.items || result.data || []
     }
   } catch (err) {
+    if (generation !== requestGeneration) return
     message.error(err.message || '获取审批列表失败')
   } finally {
-    loading.value = false
+    if (generation === requestGeneration) loading.value = false
   }
 }
 
 async function approve(item) {
   actionLoading.value = item.invocation_id
   try {
-    const result = await submitDecision(item.invocation_id, { decision: 'approve' })
+    const result = await submitDecision(item.invocation_id, { decision: 'approve', expected_digest: item.request_digest })
     if (result.success) {
       message.success('已批准')
       await fetchPending()
+      emit('decided', item)
     } else {
       message.error(result.message || '操作失败')
     }
@@ -114,10 +163,11 @@ async function approve(item) {
 async function reject(item) {
   actionLoading.value = item.invocation_id
   try {
-    const result = await submitDecision(item.invocation_id, { decision: 'reject' })
+    const result = await submitDecision(item.invocation_id, { decision: 'reject', expected_digest: item.request_digest })
     if (result.success) {
       message.success('已拒绝')
       await fetchPending()
+      emit('decided', item)
     } else {
       message.error(result.message || '操作失败')
     }
@@ -129,6 +179,7 @@ async function reject(item) {
 }
 
 function handleClose() {
+  requestGeneration++
   emit('update:open', false)
 }
 </script>

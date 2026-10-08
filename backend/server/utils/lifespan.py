@@ -52,6 +52,10 @@ async def _initialize_startup_component(
 async def _startup(app: FastAPI) -> None:
     """取得 API 运行资源并发布结构化启动状态。"""
 
+    from yuxi.services.connectors.adapters import register_builtin_adapters
+
+    register_builtin_adapters()
+
     app.state.startup_complete = False
     app.state.startup_components = {}
 
@@ -65,6 +69,8 @@ async def _startup(app: FastAPI) -> None:
     # Schema 只由 Compose 中的 storage-migrator 修改；运行进程仅校验兼容版本。
     pg_manager.initialize()
     await pg_manager.require_current_schema()
+    from yuxi.services.connectors.vault_readiness import require_connector_vault_ready
+    app.state.startup_components["connector_vault"] = await require_connector_vault_ready()
 
     from yuxi.config.options import (
         ensure_options_in_db,

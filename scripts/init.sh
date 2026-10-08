@@ -167,6 +167,28 @@ ensure_sandbox_env() {
     ensure_security_secret "SANDBOX_PROVISIONER_TOKEN" "JWT_SECRET_KEY" "API_KEY_DERIVATION_SECRET"
 }
 
+ensure_connector_vault_env() {
+    local connector_key connector_key_id
+    connector_key="$(get_env_value CREDENTIAL_ENCRYPTION_KEY)"
+    connector_key_id="$(get_env_value CREDENTIAL_ENCRYPTION_KEY_ID)"
+    if [ -z "$connector_key" ] && [ -z "$connector_key_id" ]; then
+        command -v openssl >/dev/null 2>&1 || { echo "OpenSSL is required for connector key generation." >&2; return 1; }
+        connector_key="$(openssl rand -base64 32 | tr '+/' '-_')"
+        set_env_value CREDENTIAL_ENCRYPTION_KEY "$connector_key"
+        set_env_value CREDENTIAL_ENCRYPTION_KEY_ID "connector-v1"
+        echo "Connector encryption key initialized in protected .env."
+    elif [ -z "$connector_key" ] || [ -z "$connector_key_id" ]; then
+        echo "Connector key and key_id must both exist; existing material was preserved." >&2
+        return 1
+    fi
+}
+
+if [ "${1:-}" = "--ensure-connector-vault-env" ]; then
+    [ -f .env ] || { echo ".env does not exist" >&2; exit 1; }
+    ensure_connector_vault_env
+    exit 0
+fi
+
 if [ "${1:-}" = "--validate-security-env" ]; then
     if [ ! -f ".env" ]; then
         echo ".env does not exist" >&2
@@ -196,6 +218,7 @@ if [ -f ".env" ]; then
     ensure_required_api_env
     ensure_jwt_env
     ensure_sandbox_env
+    ensure_connector_vault_env
     validate_security_env
     chmod 600 .env
 else
@@ -286,6 +309,8 @@ EOF
     chmod 600 .env
     echo "✅ .env file created successfully!"
 fi
+
+ensure_connector_vault_env
 
 echo ""
 echo "📦 Pulling Docker images..."

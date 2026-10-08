@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 
+import httpx
 import pytest
 
 from yuxi.services.connectors.http_client import (
@@ -15,11 +16,56 @@ from yuxi.services.connectors.http_client import (
     build_full_url,
     build_security_policy,
     validate_request_origin,
+    execute_http_request,
 )
+
+
+async def test_response_limit_stops_reading_and_closes_the_external_stream(monkeypatch):
+    """普通流超限立即停止读取；压缩分配边界由真实 HTTP 集成验证。"""
+    read_chunks = []
+    closed = []
+
+    class ProviderStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for index in range(5):
+                read_chunks.append(index)
+                yield b"x" * 16
+
+        async def aclose(self):
+            closed.append(True)
+
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=ProviderStream()))
+
+    def provider_client(**kwargs):
+        kwargs["transport"] = transport
+        return client_type(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client)
+    config = ConnectorHTTPConfig(base_url="https://api.example.com", max_response_bytes=20)
+    with pytest.raises(ConnectorResponseTooLargeError):
+        await execute_http_request("GET", "https://api.example.com/data", http_config=config)
+    assert read_chunks == [0, 1]
+    assert closed == [True]
+
+
+def test_path_parameter_cannot_traverse_to_another_endpoint():
+    """业务 ID 不能在附加认证前把客户路径改成管理路径。"""
+    with pytest.raises(ConnectorUnsafeTargetError):
+        build_full_url("https://api.example.com", "/v1/records/{{id}}", {"id": "../../admin?scope=all"})
 
 
 class TestConnectorHTTPConfig:
     """HTTP 配置构造与校验。"""
+
+    def test_automatic_redirects_cannot_be_enabled_by_config(self):
+        with pytest.raises(ConnectorHTTPError, match="重定向"):
+            ConnectorHTTPConfig.from_dict(
+                {
+                    "base_url": "https://api.example.com",
+                    "allow_redirects": True,
+                }
+            )
 
     def test_valid_https_config(self):
         config = ConnectorHTTPConfig.from_dict({
@@ -90,6 +136,19 @@ class TestConnectorHTTPConfig:
 
 class TestValidateRequestOrigin:
     """请求 URL origin 校验。"""
+
+    def test_same_host_different_port_is_not_an_authorized_origin(self):
+        config = ConnectorHTTPConfig(
+            base_url="https://api.example.com",
+            allowed_origins=("https://api.example.com",),
+        )
+        with pytest.raises(ConnectorUnsafeTargetError):
+            validate_request_origin("https://api.example.com:8443/private", config)
+
+    def test_missing_allowlist_still_binds_to_the_base_origin(self):
+        config = ConnectorHTTPConfig(base_url="https://api.example.com")
+        with pytest.raises(ConnectorUnsafeTargetError):
+            validate_request_origin("https://unrelated.example.com/private", config)
 
     def test_https_without_explicit_origins_allowed(self):
         config = ConnectorHTTPConfig(base_url="https://api.example.com")
@@ -195,3 +254,25 @@ class TestExceptionTypes:
     def test_timeout_code(self):
         err = ConnectorTimeoutError(30.0)
         assert err.code == "timeout"
+
+
+async def test_response_header_limit_rejects_before_consuming_body(monkeypatch):
+    """头部必须有独立上限，不能将超大远端 metadata 转为审计事实。"""
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, headers={"x-large": "x" * 33000}, json={"ok": True})
+    )
+
+    def provider_client(**kwargs):
+        kwargs["transport"] = transport
+        return client_type(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client)
+    with pytest.raises(ConnectorHTTPError, match="header"):
+        await execute_http_request("GET", "https://api.example.com", http_config=ConnectorHTTPConfig(base_url="https://api.example.com"))
+
+
+def test_allowed_origin_still_rejects_userinfo_in_provider_url():
+    """provider 返回同来源 URL 也不能注入 URL 凭据。"""
+    with pytest.raises(ConnectorUnsafeTargetError, match="userinfo"):
+        validate_request_origin("https://synthetic:synthetic@api.example.com/data", ConnectorHTTPConfig(base_url="https://api.example.com"))

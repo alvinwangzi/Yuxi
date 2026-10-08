@@ -1135,6 +1135,7 @@ async def process_agent_run(ctx, run_id: str):
                         is_parent_approval = target_thread_id == thread_id and status in {
                             "ask_user_question_required",
                             "human_approval_required",
+                            "connector_approval_required",
                         }
                         if is_parent_approval:
                             pending_interrupt = (chunk, target_thread_id)
@@ -1508,6 +1509,12 @@ async def _reconcile_agent_run_leases_forever() -> None:
                 logger.warning(f"Reconciled pending runtime cleanups: count={len(cleaned_ids)}")
             await recover_pending_dispatches()
             await recover_scheduled_dispatches()
+            from yuxi.services.workflow_service import recover_workflow_runs
+
+            await recover_workflow_runs()
+            from yuxi.services.connectors.recovery import recover_stale_leases
+
+            await recover_stale_leases(pg_manager.get_async_session_context)
             await claim_and_dispatch_due_jobs()
             await _publish_reconciliation_health()
         except asyncio.CancelledError:
@@ -1555,12 +1562,19 @@ async def _publish_reconciliation_health() -> None:
 async def _worker_startup(ctx):
     """初始化 worker 依赖。"""
 
+    from yuxi.services.connectors.adapters import register_builtin_adapters
+
+    register_builtin_adapters()
+
     if not isinstance(ctx, dict):
         raise TypeError("ARQ worker context 必须是字典")
     AuthUtils.require_security_secrets()
     ctx["worker_id"] = WORKER_ID
     pg_manager.initialize()
     await pg_manager.require_current_schema()
+    from yuxi.services.connectors.vault_readiness import require_connector_vault_ready
+
+    await require_connector_vault_ready()
     async with pg_manager.get_async_session_context() as session:
         from yuxi.config.options import (
             ensure_options_in_db,
@@ -1588,6 +1602,12 @@ async def _worker_startup(ctx):
     await reconcile_and_publish_tasks()
     await _publish_task_reconciliation_health()
     await recover_scheduled_dispatches()
+    from yuxi.services.workflow_service import recover_workflow_runs
+
+    await recover_workflow_runs()
+    from yuxi.services.connectors.recovery import recover_stale_leases
+
+    await recover_stale_leases(pg_manager.get_async_session_context)
     await claim_and_dispatch_due_jobs()
     await _publish_reconciliation_health()
     ctx[_RECONCILIATION_TASK_KEY] = asyncio.create_task(_reconcile_agent_run_leases_forever())
@@ -1616,131 +1636,18 @@ async def _worker_shutdown(ctx):
 # ── 工作流执行任务 ──
 
 
-async def process_workflow_run(ctx, run_id: int):
-    """执行队列中的工作流运行任务。"""
-    from yuxi.repositories.workflow_repository import WorkflowRepository
-    from yuxi.storage.postgres.models_business import WorkflowRun, WorkflowStepRun
-    from yuxi.workflows.engine import WorkflowEngine
+async def process_workflow_run(ctx, run_id: int, generation: int = 0):
+    """将真实队列工作流交给统一的运行状态 Owner。"""
+    from yuxi.services.workflow_execution_service import execute_workflow_run
     from yuxi.services.workflow_service import publish_workflow_event
 
-    async with pg_manager.AsyncSession() as session:
-        repo = WorkflowRepository(session)
-        run = await repo.get_run(run_id)
-
-        if not run:
-            logger.warning(f"工作流运行记录不存在: {run_id}")
-            return
-
-        if run.status in ("completed", "failed", "cancelled"):
-            logger.info(f"工作流已完成，跳过: {run_id}, status={run.status}")
-            return
-
-        # 标记为运行中
-        run.status = "running"
-        run.started_at = utc_now_naive()
-        await repo.update_run(run)
-        await session.commit()
-
-        await publish_workflow_event(run_id, "workflow_started", {"run_id": run_id})
-
-        try:
-            # 获取工作流定义
-            workflow = await repo.get_workflow(run.workflow_id)
-            if not workflow:
-                raise ValueError(f"工作流不存在: {run.workflow_id}")
-
-            # 预创建每个步骤的运行记录，以便回调中可以直接更新
-            steps = (workflow.definition or {}).get("steps", [])
-            for step in steps:
-                # 检查是否已存在（重试时避免重复创建）
-                existing = await repo.get_step_run(run_id, step["id"])
-                if existing:
-                    continue
-                step_run = WorkflowStepRun(
-                    workflow_run_id=run_id,
-                    step_id=step["id"],
-                    step_type=step.get("type", "llm"),
-                    status="pending",
-                )
-                await repo.create_step_run(step_run)
-            await session.commit()
-
-            # 创建执行引擎（定义与输入变量在 execute 时传入）
-            # 异步锁保护回调，避免并行步骤并发访问同一 db session
-            callback_lock = asyncio.Lock()
-
-            async def _locked_step_start(step_id, step_type):
-                async with callback_lock:
-                    await _on_step_start(repo, run_id, step_id, step_type)
-                    await session.commit()  # 提交使前端轮询可见
-
-            async def _locked_step_done(step_id, output):
-                async with callback_lock:
-                    await _on_step_done(repo, run_id, step_id, output)
-                    await session.commit()  # 提交使前端轮询可见
-
-            async def _locked_step_error(step_id, error):
-                async with callback_lock:
-                    await _on_step_error(repo, run_id, step_id, error)
-                    await session.commit()  # 提交使前端轮询可见
-
-            engine = WorkflowEngine(
-                on_step_start=_locked_step_start,
-                on_step_done=_locked_step_done,
-                on_step_error=_locked_step_error,
-            )
-
-            # 执行工作流
-            context = await engine.execute(workflow.definition, run.input_variables or {}, db_session=session)
-
-            # 标记完成
-            run.status = "completed"
-            run.context = context
-            run.completed_at = utc_now_naive()
-            await repo.update_run(run)
-            await session.commit()
-
-            await publish_workflow_event(run_id, "workflow_completed", {"run_id": run_id})
-            logger.info(f"工作流执行完成: run_id={run_id}")
-
-        except Exception as exc:
-            logger.error(f"工作流执行失败: run_id={run_id}, error={exc}")
-            run.status = "failed"
-            run.error_message = str(exc)[:2000]
-            run.completed_at = utc_now_naive()
-            await repo.update_run(run)
-            await session.commit()
-
-            await publish_workflow_event(run_id, "workflow_failed", {"run_id": run_id, "error": str(exc)})
-
-
-async def _on_step_start(repo: "WorkflowRepository", run_id: int, step_id: str, step_type: str):
-    """步骤开始执行回调。"""
-    step_run = await repo.get_step_run(run_id, step_id)
-    if step_run:
-        step_run.status = "running"
-        step_run.started_at = utc_now_naive()
-        await repo.update_step_run(step_run)
-
-
-async def _on_step_done(repo: "WorkflowRepository", run_id: int, step_id: str, output: dict):
-    """步骤执行完成回调。"""
-    step_run = await repo.get_step_run(run_id, step_id)
-    if step_run:
-        step_run.status = "completed"
-        step_run.output_payload = output
-        step_run.completed_at = utc_now_naive()
-        await repo.update_step_run(step_run)
-
-
-async def _on_step_error(repo: "WorkflowRepository", run_id: int, step_id: str, error: str):
-    """步骤执行错误回调。"""
-    step_run = await repo.get_step_run(run_id, step_id)
-    if step_run:
-        step_run.status = "failed"
-        step_run.error_message = error[:1000]
-        step_run.completed_at = utc_now_naive()
-        await repo.update_step_run(step_run)
+    await execute_workflow_run(
+        run_id,
+        session_factory=pg_manager.get_async_session_context,
+        owner_id=ctx.get("worker_id") or WORKER_ID,
+        event_publisher=publish_workflow_event,
+        generation=generation,
+    )
 
 
 class WorkerSettings:

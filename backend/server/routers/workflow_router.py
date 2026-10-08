@@ -13,8 +13,7 @@ from server.utils.auth_middleware import get_admin_user, get_db, get_required_us
 from yuxi.repositories.category_repository import CategoryRepository
 from yuxi.repositories.workflow_repository import WorkflowRepository
 from yuxi.repositories.agent_repository import AgentRepository, DEFAULT_SHARE_CONFIG
-from yuxi.services.workflow_service import submit_workflow_run
-from yuxi.storage.postgres.models_business import Agent, User, Workflow, WorkflowRun, WorkflowStepRun
+from yuxi.storage.postgres.models_business import Agent, User, Workflow
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.logging_config import logger
 from yuxi.workflows import STEP_TYPES
@@ -128,8 +127,10 @@ async def list_workflows(
 ):
     """获取工作流列表。"""
     repo = WorkflowRepository(db)
-    workflows = await repo.list_workflows(category=category, category_id=category_id, scope=scope, limit=limit, offset=offset)
-    total = await repo.count_workflows(category=category, category_id=category_id, scope=scope)
+    workflows = await repo.list_workflows(
+        category=category, category_id=category_id, scope=scope, limit=limit, offset=offset, actor=user
+    )
+    total = await repo.count_workflows(category=category, category_id=category_id, scope=scope, actor=user)
     return {
         "success": True,
         "data": [w.to_dict() for w in workflows],
@@ -147,26 +148,8 @@ async def list_selectable_workflows(
     管理员：返回所有非平台工作流
     普通用户：返回公司级 + 自己的个人级工作流
     """
-    from sqlalchemy import or_
-    
-    repo = WorkflowRepository(db)
-    
-    if user.role in ("admin", "superadmin"):
-        # 管理员看所有非平台工作流
-        workflows = await repo.list_workflows(limit=200)
-        # 过滤掉平台工作流
-        workflows = [w for w in workflows if w.scope != "platform"]
-    else:
-        # 普通用户：公司级 + 自己的个人级
-        stmt = select(Workflow).where(
-            or_(
-                Workflow.scope == "company",
-                (Workflow.scope == "personal") & (Workflow.created_by == str(user.uid))
-            )
-        ).order_by(Workflow.updated_at.desc()).limit(200)
-        result = await db.execute(stmt)
-        workflows = list(result.scalars().all())
-    
+    workflows = await WorkflowRepository(db).list_workflows(limit=200, actor=user)
+    workflows = [w for w in workflows if w.scope != "platform"]
     return {
         "success": True,
         "data": [w.to_dict() for w in workflows],
@@ -331,41 +314,18 @@ async def run_workflow(
     user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """触发工作流执行。"""
-    repo = WorkflowRepository(db)
-    workflow = await repo.get_workflow(workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
-
-    # 防止并发运行：检查是否已有 pending/running 状态的运行记录
-    active_run = await repo.get_active_run(workflow.id)
-    if active_run:
-        raise HTTPException(
-            status_code=409,
-            detail=f"工作流正在运行中（run_id={active_run.id}，状态={active_run.status}），请等待完成后再次提交",
-        )
-
-    # 创建运行记录
-    run = WorkflowRun(
-        workflow_id=workflow.id,
-        status="pending",
-        trigger="manual",
-        input_variables=payload.input_variables,
-        created_by=str(user.uid),
-    )
-    await repo.create_run(run)
-
-    # 提交到 ARQ 队列执行
+    """经用例冻结定义、提交运行与可恢复投递意图。"""
+    from yuxi.services.workflow_service import create_workflow_execution, WorkflowSubmissionConflict
     try:
-        result = await submit_workflow_run(db, run.id)
-        return {"success": True, "data": {**run.to_dict(), "queued": result.get("queued", False)}}
-    except Exception as exc:
-        logger.error(f"提交工作流执行失败: {exc}")
-        # 标记为失败
-        run.status = "failed"
-        run.error_message = f"提交执行失败: {exc}"
-        await repo.update_run(run)
-        return {"success": True, "data": run.to_dict()}
+        result = await create_workflow_execution(db, workflow_id=workflow_id, actor_uid=str(user.uid),
+                                                  input_variables=payload.input_variables)
+    except PermissionError:
+        raise HTTPException(404, detail="工作流不存在")
+    except WorkflowSubmissionConflict:
+        raise HTTPException(409, detail="工作流已有活跃运行，请等待其完成或取消")
+    except ValueError:
+        raise HTTPException(422, detail="工作流定义无效")
+    return {"success": True, "data": result}
 
 
 @workflow_router.get("/runs/{run_id}")
@@ -376,7 +336,7 @@ async def get_workflow_run(
 ):
     """获取运行详情。"""
     repo = WorkflowRepository(db)
-    run = await repo.get_run(run_id)
+    run = await repo.get_run_for_actor(run_id, str(user.uid))
     if not run:
         raise HTTPException(status_code=404, detail="运行记录不存在")
 
@@ -396,34 +356,14 @@ async def cancel_workflow_run(
     user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """强制终止卡住的工作流运行。
+    """取消当前用户的运行，包括等待审批和等待 Agent。"""
+    from yuxi.services.workflow_service import cancel_workflow_execution
 
-    仅当运行处于非终态（pending / running）时允许操作；
-    将运行记录和所有未完成的步骤运行标记为 failed。
-    """
-    repo = WorkflowRepository(db)
-    run = await repo.get_run(run_id)
-    if not run:
+    try:
+        await cancel_workflow_execution(run_id, actor_uid=user.uid)
+    except PermissionError:
         raise HTTPException(status_code=404, detail="运行记录不存在")
-
-    if run.status not in ("pending", "running"):
-        raise HTTPException(status_code=409, detail=f"运行已终结（当前状态: {run.status}），无法取消")
-
-    # 标记所有未完成的 step_runs 为 failed
-    step_runs = await repo.list_step_runs(run_id)
-    for sr in step_runs:
-        if sr.status in ("pending", "running"):
-            sr.status = "failed"
-            sr.error_message = "用户手动强制关闭"
-            await repo.update_step_run(sr)
-
-    # 标记主运行为 failed
-    run.status = "failed"
-    run.error_message = "用户手动强制关闭"
-    run.completed_at = utc_now_naive()
-    await repo.update_run(run)
-    await db.commit()
-
+    run = await WorkflowRepository(db).get_run(run_id, for_update=True)
     return {"success": True, "data": {"id": run.id, "status": run.status}}
 
 
@@ -438,7 +378,7 @@ async def get_workflow(
 ):
     """获取工作流详情。"""
     repo = WorkflowRepository(db)
-    workflow = await repo.get_workflow(workflow_id)
+    workflow = await repo.get_visible_workflow(workflow_id, user)
     if not workflow:
         raise HTTPException(status_code=404, detail="工作流不存在")
     return {"success": True, "data": workflow.to_dict()}
@@ -452,11 +392,11 @@ async def list_workflow_runs(
 ):
     """获取工作流运行历史。"""
     repo = WorkflowRepository(db)
-    workflow = await repo.get_workflow(workflow_id)
+    workflow = await repo.get_visible_workflow(workflow_id, user)
     if not workflow:
         raise HTTPException(status_code=404, detail="工作流不存在")
 
-    runs = await repo.list_runs(workflow_id, limit=50)
+    runs = await repo.list_runs(workflow_id, limit=50, actor_uid=str(user.uid))
     return {
         "success": True,
         "data": [r.to_dict() for r in runs],

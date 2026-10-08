@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
+import copy
 from datetime import datetime
 from typing import Any
 
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.logging_config import logger
 from yuxi.workflows.dag import DAGLayer, build_dag
+from yuxi.workflows.context import WorkflowExecutionContext, WorkflowPaused, WorkflowStepWaiting
 from yuxi.workflows.template import evaluate_condition, resolve_template
 
 
@@ -26,7 +29,7 @@ class WorkflowEngine:
     4. 通过回调上报进度（SSE 推送）
     """
 
-    def __init__(self, *, on_step_start=None, on_step_done=None, on_step_error=None):
+    def __init__(self, *, on_step_start=None, on_step_done=None, on_step_error=None, on_checkpoint=None):
         """
         Args:
             on_step_start: 步骤开始执行时的回调 (step_id, step_type) -> None
@@ -36,6 +39,7 @@ class WorkflowEngine:
         self._on_step_start = on_step_start
         self._on_step_done = on_step_done
         self._on_step_error = on_step_error
+        self._on_checkpoint = on_checkpoint
 
     async def execute(
         self,
@@ -43,6 +47,8 @@ class WorkflowEngine:
         input_variables: dict[str, Any],
         *,
         db_session=None,
+        execution_context: WorkflowExecutionContext | None = None,
+        resume_state: dict | None = None,
     ) -> dict[str, Any]:
         """执行工作流，返回最终的 context。
 
@@ -56,7 +62,10 @@ class WorkflowEngine:
         """
         layers = build_dag(definition)
         concurrency = definition.get("concurrency", 4)
-        context: dict[str, Any] = dict(input_variables)
+        resume_state = resume_state or {}
+        if resume_state and resume_state.get("state_version") != 1:
+            raise WorkflowExecutionError("不支持的工作流恢复状态")
+        context: dict[str, Any] = dict(resume_state.get("context", input_variables))
 
         # 步骤索引（用于快速查找）
         step_index: dict[str, dict] = {}
@@ -64,16 +73,39 @@ class WorkflowEngine:
             step_index[step["id"]] = step
 
         # 循环迭代计数
-        loop_counts: dict[str, int] = {}
+        loop_counts: dict[str, int] = dict(resume_state.get("loop_counts", {}))
 
         # 执行记录
-        step_results: dict[str, Any] = {}
+        step_results: dict[str, Any] = dict(resume_state.get("step_results", {}))
         step_errors: dict[str, str] = {}
+        pending: dict[str, dict] = {}
+        activations: dict[str, str] = dict(resume_state.get("activations", {}))
 
         # 当前执行起始层索引（支持循环回退）
-        start_layer_idx = 0
+        start_layer_idx = int(resume_state.get("layer_index", 0))
+
+        async def checkpoint():
+            """提交 dispatch 前的激活与每个已完成输出，供崩溃后复用。"""
+            state = copy.deepcopy(
+                {
+                    "state_version": 1,
+                    "context": context,
+                    "layer_index": start_layer_idx,
+                    "step_results": step_results,
+                    "loop_counts": loop_counts,
+                    "pending": pending,
+                    "activations": activations,
+                }
+            )
+            if self._on_checkpoint is not None:
+                await self._on_checkpoint(state)
+            return state
 
         while start_layer_idx < len(layers):
+            for node in layers[start_layer_idx].nodes:
+                if node.id not in step_results:
+                    activations.setdefault(node.id, str(uuid.uuid4()))
+            await checkpoint()
             await self._execute_layer(
                 layer=layers[start_layer_idx],
                 step_index=step_index,
@@ -83,10 +115,16 @@ class WorkflowEngine:
                 step_errors=step_errors,
                 loop_counts=loop_counts,
                 db_session=db_session,
+                execution_context=execution_context,
+                pending=pending,
+                activations=activations,
+                checkpoint=checkpoint,
             )
             # 当前层有步骤失败，立即停止后续层
             if step_errors:
                 break
+            if pending:
+                raise WorkflowPaused(await checkpoint())
 
             # 检查是否有步骤触发了循环回退
             loop_back_to = None
@@ -121,6 +159,7 @@ class WorkflowEngine:
                                 del step_results[sid]
                             if sid in step_errors:
                                 del step_errors[sid]
+                            activations.pop(sid, None)
                     # 回退到目标层重新执行
                     start_layer_idx = target_layer_idx
                     continue
@@ -163,6 +202,10 @@ class WorkflowEngine:
         step_errors: dict[str, str],
         loop_counts: dict[str, int],
         db_session=None,
+        execution_context: WorkflowExecutionContext | None = None,
+        pending: dict | None = None,
+        activations: dict | None = None,
+        checkpoint=None,
     ) -> None:
         """执行一个 DAG 层级 — 同层步骤并行。
 
@@ -176,8 +219,12 @@ class WorkflowEngine:
         logger.info(f"开始执行第 {layer.index} 层，共 {len(layer.nodes)} 个步骤: {[n.id for n in layer.nodes]}")
 
         semaphore = asyncio.Semaphore(concurrency)
+        pending = pending if pending is not None else {}
+        activations = activations if activations is not None else {}
 
         async def _run_step(node):
+            if node.id in step_results:
+                return
             try:
                 async with semaphore:
                     # 为每个步骤创建独立的 db session，避免并行步骤共享同一 session
@@ -194,6 +241,13 @@ class WorkflowEngine:
                             step_errors=step_errors,
                             loop_counts=loop_counts,
                             db_session=step_session,
+                            execution_context=(
+                                execution_context.for_step(node.id, activations.setdefault(node.id, str(uuid.uuid4())))
+                                if execution_context is not None
+                                else None
+                            ),
+                            pending=pending,
+                            checkpoint=checkpoint,
                         )
                     finally:
                         if step_session is not None:
@@ -222,7 +276,7 @@ class WorkflowEngine:
 
         # 检查是否有步骤未执行（既无结果也无错误）
         for node in layer.nodes:
-            if node.id not in step_results and node.id not in step_errors:
+            if node.id not in step_results and node.id not in step_errors and node.id not in pending:
                 step_errors[node.id] = "步骤未执行（任务未启动）"
                 logger.warning(f"步骤 {node.id} 在第 {layer.index} 层未执行，可能是任务调度失败")
                 if self._on_step_error:
@@ -245,6 +299,9 @@ class WorkflowEngine:
         step_errors: dict[str, str],
         loop_counts: dict[str, int],
         db_session=None,
+        execution_context: WorkflowExecutionContext | None = None,
+        pending: dict | None = None,
+        checkpoint=None,
     ) -> None:
         """执行单个步骤。"""
         step_id = step_data["id"]
@@ -267,7 +324,10 @@ class WorkflowEngine:
             resolved_input = resolve_template(step_data, context)
 
             # 按类型分发到执行器
-            output = await self._dispatch(step_type, resolved_input, context, db_session=db_session)
+            dispatch_kwargs = {"db_session": db_session}
+            if execution_context is not None:
+                dispatch_kwargs["execution_context"] = execution_context
+            output = await self._dispatch(step_type, resolved_input, context, **dispatch_kwargs)
 
             # 写入上下文
             output_key = step_data.get("output_key")
@@ -278,7 +338,13 @@ class WorkflowEngine:
 
             if self._on_step_done:
                 await self._on_step_done(step_id, output)
+            if checkpoint is not None:
+                await checkpoint()
 
+        except WorkflowStepWaiting as waiting:
+            if pending is None:
+                raise
+            pending[step_id] = {"status": waiting.status, **waiting.binding}
         except Exception as e:
             step_errors[step_id] = str(e)
             logger.exception(f"步骤 {step_id} 执行异常")
@@ -319,9 +385,17 @@ class WorkflowEngine:
         context: dict[str, Any],
         *,
         db_session=None,
+        execution_context: WorkflowExecutionContext | None = None,
     ) -> Any:
         """按步骤类型分发到对应执行器。"""
         from yuxi.workflows.executors import get_executor
 
         executor = get_executor(step_type)
+        if execution_context is not None and step_type in ("llm", "connector"):
+            return await executor.execute(
+                resolved_input,
+                context,
+                db_session=db_session,
+                execution_context=execution_context,
+            )
         return await executor.execute(resolved_input, context, db_session=db_session)

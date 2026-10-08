@@ -12,14 +12,15 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from yuxi.services.connectors.credential_vault import CredentialVault
+from yuxi.services.connectors.service import ConnectorService
 
 SessionContextFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
 def _default_session_context_factory() -> AbstractAsyncContextManager[AsyncSession]:
     from yuxi.storage.postgres.manager import pg_manager
+
     return pg_manager.get_async_session_context()
 
 
@@ -52,8 +53,10 @@ class ConnectorServiceFactory:
     def vault_provider(self) -> Callable[[], CredentialVault | None]:
         return self._vault_provider
 
-    def create_service(self) -> "ConnectorService":
-        from yuxi.services.connectors.service import ConnectorService
+    def create_service(self) -> ConnectorService:
+        from yuxi.services.connectors.adapters import register_builtin_adapters
+
+        register_builtin_adapters()
         return ConnectorService(
             session_context_factory=self._session_context_factory,
             vault_provider=self._vault_provider,
@@ -71,7 +74,7 @@ def get_connector_service_factory() -> ConnectorServiceFactory:
     return _default_factory
 
 
-def get_connector_service() -> "ConnectorService":
+def get_connector_service() -> ConnectorService:
     return get_connector_service_factory().create_service()
 
 

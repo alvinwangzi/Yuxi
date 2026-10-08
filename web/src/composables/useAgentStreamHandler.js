@@ -189,6 +189,7 @@ export function useAgentStreamHandler({
 
       case 'ask_user_question_required':
       case 'human_approval_required':
+      case 'connector_approval_required':
         streamSmoother?.flushThread(threadId)
         threadState.replyLoadingVisible = false
         console.log(`${debugPrefix}[approval_required]`, {

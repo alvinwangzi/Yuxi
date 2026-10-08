@@ -18,78 +18,47 @@ if sys.platform == "win32":
 
 from yuxi.agents.connectors.tools import (
     _build_args_schema,
-    _format_tool_result,
-    _sanitize_slug,
+    format_connector_tool_result,
     get_connector_tools,
 )
 
 
-class TestSanitizeSlug:
-    def test_hyphen_to_underscore(self):
-        assert _sanitize_slug("my-connector") == "my_connector"
+class TestToolNamespace:
+    def test_slugs_remain_lossless_and_names_cannot_collide(self):
+        from yuxi.services.connectors.schemas import validate_operation_namespace
 
-    def test_dot_to_underscore(self):
-        assert _sanitize_slug("my.connector") == "my_connector"
+        assert validate_operation_namespace("crm-x", "read") != validate_operation_namespace("crm_x", "read")
+        assert validate_operation_namespace("crm", "read") == "cn_crm__read"
 
-    def test_truncation(self):
-        long_slug = "a" * 100
-        assert len(_sanitize_slug(long_slug)) == 40
+    @pytest.mark.parametrize(
+        "connector, operation", [("a" * 40, "b" * 40), ("crm__read", "write"), ("crm", "read__write")]
+    )
+    def test_overlong_or_ambiguous_names_are_rejected(self, connector, operation):
+        from yuxi.services.connectors.schemas import validate_operation_namespace, ConnectorSchemaError
 
-    def test_mixed_characters(self):
-        assert _sanitize_slug("crm-v2.0") == "crm_v2_0"
+        with pytest.raises(ConnectorSchemaError):
+            validate_operation_namespace(connector, operation)
 
 
 class TestBuildArgsSchema:
-    def test_none_schema_returns_empty_model(self):
-        model = _build_args_schema(None)
-        instance = model()
-        assert instance is not None
+    def test_no_schema_is_explicit_empty_object(self):
+        assert _build_args_schema(None) == {"type": "object", "properties": {}}
 
-    def test_empty_schema_returns_empty_model(self):
-        model = _build_args_schema({})
-        instance = model()
-        assert instance is not None
-
-    def test_string_property(self):
+    def test_full_schema_is_preserved_without_mutating_metadata(self):
         schema = {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "客户名称"}},
+            "properties": {"name": {"type": "string", "enum": ["A"], "description": "名称"}},
             "required": ["name"],
+            "additionalProperties": False,
         }
-        model = _build_args_schema(schema)
-        instance = model(name="Acme")
-        assert instance.name == "Acme"
+        actual = _build_args_schema(schema)
+        assert actual == schema and actual is not schema
+        actual["properties"]["name"]["enum"].append("B")
+        assert schema["properties"]["name"]["enum"] == ["A"]
 
-    def test_integer_property(self):
-        schema = {
-            "type": "object",
-            "properties": {"count": {"type": "integer"}},
-        }
-        model = _build_args_schema(schema)
-        instance = model(count=42)
-        assert instance.count == 42
-
-    def test_optional_property_defaults_none(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "note": {"type": "string"},
-            },
-            "required": ["name"],
-        }
-        model = _build_args_schema(schema)
-        instance = model(name="Acme")
-        assert instance.note is None
-
-    def test_boolean_property(self):
-        schema = {
-            "type": "object",
-            "properties": {"active": {"type": "boolean"}},
-        }
-        model = _build_args_schema(schema)
-        instance = model(active=True)
-        assert instance.active is True
+    def test_runtime_cannot_be_declared_as_business_input(self):
+        with pytest.raises(ValueError, match="保留参数"):
+            _build_args_schema({"type": "object", "properties": {"runtime": {"type": "string"}}})
 
 
 class TestFormatToolResult:
@@ -99,7 +68,7 @@ class TestFormatToolResult:
             "mapped_result": {"accounts": [{"id": "001"}]},
             "remote_outcome": "success",
         }
-        output = json.loads(_format_tool_result(result))
+        output = json.loads(format_connector_tool_result(result))
         assert output["invocation_id"] == "inv-1"
         assert output["result"] == {"accounts": [{"id": "001"}]}
         assert output["remote_outcome"] == "success"
@@ -110,7 +79,7 @@ class TestFormatToolResult:
             "error_code": "not_found",
             "error_message": "连接器不存在",
         }
-        output = json.loads(_format_tool_result(result))
+        output = json.loads(format_connector_tool_result(result))
         assert output["error_code"] == "not_found"
         assert output["error_message"] == "连接器不存在"
 
@@ -119,12 +88,44 @@ class TestFormatToolResult:
             "invocation_id": "inv-3",
             "data": {"raw": True},
         }
-        output = json.loads(_format_tool_result(result))
+        output = json.loads(format_connector_tool_result(result))
         assert output["result"] == {"raw": True}
 
 
 class TestGetConnectorTools:
     """Agent 工具生成集成测试。"""
+
+    @pytest.mark.parametrize("always_trust", [False, True])
+    async def test_subagent_never_exposes_required_write_without_approval_transfer(self, always_trust):
+        """父级信任设置不能给子 Agent 提供未装配的审批转交。"""
+        service = AsyncMock()
+        service.get_connector_metadata.return_value = {
+            "operations": [
+                {"slug": "read", "operation_type": "read"},
+                {"slug": "required", "operation_type": "write", "approval_policy": "required"},
+                {"slug": "preauthorized", "operation_type": "write", "approval_policy": "preauthorized"},
+            ]
+        }
+        context = SimpleNamespace(connectors=["crm"], uid="actor", is_subagent_runtime=True, always_trust=always_trust)
+        with patch("yuxi.services.connectors.factory.get_connector_service", return_value=service):
+            tools = await get_connector_tools(context)
+        assert {tool.name for tool in tools} == {"cn_crm__read", "cn_crm__preauthorized"}
+
+    async def test_required_tool_explicit_subagent_runtime_call_is_rejected(self):
+        """即使手动取得主 Agent 工具，运行时子身份仍不能发出 required 写。"""
+        from yuxi.agents.connectors.tools import build_connector_operation_tool
+
+        service = AsyncMock()
+        tool = build_connector_operation_tool(
+            service,
+            "crm",
+            {"slug": "write", "operation_type": "write", "approval_policy": "required"},
+            SimpleNamespace(),
+        )
+        runtime = SimpleNamespace(context=SimpleNamespace(is_subagent_runtime=True))
+        with pytest.raises(ValueError, match="subagent_connector_approval_unavailable"):
+            await tool.coroutine(runtime=runtime)
+        service.prepare_and_execute.assert_not_called()
 
     async def test_empty_connectors_returns_empty(self):
         context = SimpleNamespace(connectors=[])
@@ -165,9 +166,7 @@ class TestGetConnectorTools:
             ],
         }
 
-        with patch(
-            "yuxi.services.connectors.factory.get_connector_service"
-        ) as mock_get_service:
+        with patch("yuxi.services.connectors.factory.get_connector_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
             mock_get_service.return_value = mock_service
@@ -182,76 +181,68 @@ class TestGetConnectorTools:
         context = SimpleNamespace(connectors=["sales-force"], uid="user-1")
         metadata = {
             "slug": "sales-force",
-            "operations": [{
-                "slug": "get-opp",
-                "name": "获取商机",
-                "operation_type": "read",
-                "http_method": "GET",
-                "request_schema": None,
-                "connector_revision": 1,
-                "operation_revision": 1,
-            }],
+            "operations": [
+                {
+                    "slug": "get-opp",
+                    "name": "获取商机",
+                    "operation_type": "read",
+                    "http_method": "GET",
+                    "request_schema": None,
+                    "connector_revision": 1,
+                    "operation_revision": 1,
+                }
+            ],
         }
 
-        with patch(
-            "yuxi.services.connectors.factory.get_connector_service"
-        ) as mock_get_service:
+        with patch("yuxi.services.connectors.factory.get_connector_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
             mock_get_service.return_value = mock_service
 
             tools = await get_connector_tools(context)
 
-        assert tools[0].name == "cn_sales_force__get_opp"
+        assert tools[0].name == "cn_sales-force__get-opp"
 
-    async def test_connector_not_found_skipped(self):
+    async def test_explicit_connector_not_found_is_an_assembly_error(self):
         context = SimpleNamespace(connectors=["missing"], uid="user-1")
 
-        with patch(
-            "yuxi.services.connectors.factory.get_connector_service"
-        ) as mock_get_service:
+        with patch("yuxi.services.connectors.factory.get_connector_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=None)
             mock_get_service.return_value = mock_service
 
-            tools = await get_connector_tools(context)
+            with pytest.raises(ValueError, match="configured_connector_unavailable"):
+                await get_connector_tools(context)
 
-        assert tools == []
-
-    async def test_connector_load_error_skipped(self):
+    async def test_explicit_connector_load_error_propagates(self):
         context = SimpleNamespace(connectors=["broken"], uid="user-1")
 
-        with patch(
-            "yuxi.services.connectors.factory.get_connector_service"
-        ) as mock_get_service:
+        with patch("yuxi.services.connectors.factory.get_connector_service") as mock_get_service:
             mock_service = AsyncMock()
-            mock_service.get_connector_metadata = AsyncMock(
-                side_effect=Exception("DB error")
-            )
+            mock_service.get_connector_metadata = AsyncMock(side_effect=Exception("DB error"))
             mock_get_service.return_value = mock_service
 
-            tools = await get_connector_tools(context)
-
-        assert tools == []
+            with pytest.raises(Exception, match="DB error"):
+                await get_connector_tools(context)
 
     async def test_tool_description_contains_operation_info(self):
         context = SimpleNamespace(connectors=["crm"], uid="user-1")
         metadata = {
             "slug": "crm",
-            "operations": [{
-                "slug": "query",
-                "name": "查询客户",
-                "operation_type": "read",
-                "http_method": "GET",
-                "request_schema": None,
-                "connector_revision": 1,
-                "operation_revision": 1,
-            }],
+            "operations": [
+                {
+                    "slug": "query",
+                    "name": "查询客户",
+                    "operation_type": "read",
+                    "http_method": "GET",
+                    "request_schema": None,
+                    "connector_revision": 1,
+                    "operation_revision": 1,
+                }
+            ],
         }
 
-        with patch(
-            "yuxi.services.connectors.factory.get_connector_service"
-        ) as mock_get_service:
+        with patch("yuxi.services.connectors.factory.get_connector_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
             mock_get_service.return_value = mock_service
@@ -266,20 +257,20 @@ class TestGetConnectorTools:
         context = SimpleNamespace(connectors=["crm"], uid="user-1")
         metadata = {
             "slug": "crm",
-            "operations": [{
-                "slug": "update",
-                "name": "更新商机",
-                "operation_type": "write",
-                "http_method": "PUT",
-                "request_schema": None,
-                "connector_revision": 1,
-                "operation_revision": 1,
-            }],
+            "operations": [
+                {
+                    "slug": "update",
+                    "name": "更新商机",
+                    "operation_type": "write",
+                    "http_method": "PUT",
+                    "request_schema": None,
+                    "connector_revision": 1,
+                    "operation_revision": 1,
+                }
+            ],
         }
 
-        with patch(
-            "yuxi.services.connectors.factory.get_connector_service"
-        ) as mock_get_service:
+        with patch("yuxi.services.connectors.factory.get_connector_service") as mock_get_service:
             mock_service = AsyncMock()
             mock_service.get_connector_metadata = AsyncMock(return_value=metadata)
             mock_get_service.return_value = mock_service

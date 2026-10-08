@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from yuxi.workflows.executors.connector_executor import ConnectorStepExecutor
+from yuxi.workflows.context import WorkflowExecutionContext, WorkflowStepWaiting
 
 
 class TestConnectorStepExecutor:
@@ -72,6 +73,9 @@ class TestConnectorStepExecutor:
                     "__workflow_run_id__": 42,
                     "__actor_uid__": "user-abc",
                 },
+                execution_context=WorkflowExecutionContext("user-abc", 1, 42, "worker", "lease").for_step(
+                    "crm_query", "activation"
+                ),
             )
 
         assert result["success"] is True
@@ -79,8 +83,8 @@ class TestConnectorStepExecutor:
         assert result["result"] == {"accounts": [{"id": "001", "name": "Acme"}]}
         mock_service.prepare_and_execute.assert_called_once()
 
-    async def test_approval_required_returns_waiting(self, executor):
-        """写操作需审批时返回 waiting_approval。"""
+    async def test_approval_required_raises_waiting(self, executor):
+        """写操作审批需要引擎暂停信号，不能伪装普通步骤结果。"""
         from yuxi.services.connectors.service import ConnectorApprovalRequired
 
         with patch(
@@ -96,23 +100,27 @@ class TestConnectorStepExecutor:
             )
             mock_factory.return_value = mock_service
 
-            result = await executor.execute(
-                {
-                    "id": "crm_update",
-                    "connector_slug": "salesforce",
-                    "operation_slug": "update_opportunity",
-                    "params": {"id": "001", "stage": "Closed Won"},
-                },
-                {
-                    "__workflow_id__": 1,
-                    "__workflow_run_id__": 42,
-                    "__actor_uid__": "user-abc",
-                },
-            )
+            with pytest.raises(WorkflowStepWaiting) as waiting:
+                await executor.execute(
+                    {
+                        "id": "crm_update",
+                        "connector_slug": "salesforce",
+                        "operation_slug": "update_opportunity",
+                        "params": {"id": "001", "stage": "Closed Won"},
+                    },
+                    {
+                        "__workflow_id__": 1,
+                        "__workflow_run_id__": 42,
+                        "__actor_uid__": "user-abc",
+                    },
+                    execution_context=WorkflowExecutionContext("user-abc", 1, 42, "worker", "lease").for_step(
+                        "crm_update", "activation"
+                    ),
+                )
 
-        assert result["status"] == "waiting_approval"
-        assert result["invocation_id"] == "inv-456"
-        assert result["step_id"] == "crm_update"
+        assert waiting.value.status == "waiting_approval"
+        assert waiting.value.binding["invocation_id"] == "inv-456"
+        assert waiting.value.binding["digest"] == "abc123"
 
     async def test_service_error_raises_runtime_error(self, executor):
         """服务错误转为 RuntimeError。"""
@@ -136,6 +144,9 @@ class TestConnectorStepExecutor:
                         "params": {},
                     },
                     {},
+                    execution_context=WorkflowExecutionContext("actor", 1, 42, "worker", "lease").for_step(
+                        "crm_query", "activation"
+                    ),
                 )
 
     async def test_execution_context_built_correctly(self, executor):
@@ -166,6 +177,9 @@ class TestConnectorStepExecutor:
                     "__actor_uid__": "user-xyz",
                     "__step_execution_id__": "exec-abc",
                 },
+                execution_context=WorkflowExecutionContext("user-xyz", 5, 99, "worker", "lease").for_step(
+                    "step_1", "exec-abc"
+                ),
             )
 
         call_kwargs = mock_service.prepare_and_execute.call_args

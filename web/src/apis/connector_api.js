@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiAdminGet, apiAdminPost, apiAdminPut, apiAdminDelete } from './base'
+import { apiGet, apiPost, apiAdminGet, apiAdminPost, apiAdminPatch, apiAdminDelete } from './base'
 
 const ADMIN_BASE = '/api/system/connectors'
 const USER_BASE = '/api/connectors'
@@ -12,8 +12,8 @@ export const getConnectors = async (params = {}) => {
   if (params.search) query.set('search', params.search)
   if (params.connector_type) query.set('connector_type', params.connector_type)
   if (params.enabled !== undefined) query.set('enabled', String(params.enabled))
-  if (params.page) query.set('page', String(params.page))
-  if (params.page_size) query.set('page_size', String(params.page_size))
+  if (params.page) query.set('offset', String((params.page - 1) * (params.page_size || 20)))
+  if (params.page_size) query.set('limit', String(params.page_size))
   const qs = query.toString()
   return apiAdminGet(`${ADMIN_BASE}${qs ? '?' + qs : ''}`)
 }
@@ -27,7 +27,7 @@ export const createConnector = async (data) => {
 }
 
 export const updateConnector = async (slug, data) => {
-  return apiAdminPut(`${ADMIN_BASE}/${encodeURIComponent(slug)}`, data)
+  return apiAdminPatch(`${ADMIN_BASE}/${encodeURIComponent(slug)}`, data)
 }
 
 export const deleteConnector = async (slug) => {
@@ -35,12 +35,15 @@ export const deleteConnector = async (slug) => {
 }
 
 export const patchCredentials = async (slug, data) => {
-  return apiAdminPut(`${ADMIN_BASE}/${encodeURIComponent(slug)}/credentials`, data)
+  return apiAdminPatch(`${ADMIN_BASE}/${encodeURIComponent(slug)}/credentials`, data)
 }
 
 export const testConnector = async (slug) => {
   return apiAdminPost(`${ADMIN_BASE}/${encodeURIComponent(slug)}/test`)
 }
+
+export const discoverConnectorMetadata = async (slug) => apiAdminPost(`${ADMIN_BASE}/${encodeURIComponent(slug)}/metadata`)
+export const getManagementInvocation = async (id) => apiAdminGet(`${ADMIN_BASE}/invocations/${encodeURIComponent(id)}`)
 
 export const getConnectorOperations = async (slug) => {
   return apiAdminGet(`${ADMIN_BASE}/${encodeURIComponent(slug)}/operations`)
@@ -51,7 +54,7 @@ export const createConnectorOperation = async (slug, data) => {
 }
 
 export const updateConnectorOperation = async (slug, operationSlug, data) => {
-  return apiAdminPut(
+  return apiAdminPatch(
     `${ADMIN_BASE}/${encodeURIComponent(slug)}/operations/${encodeURIComponent(operationSlug)}`,
     data,
   )
@@ -74,8 +77,11 @@ export const getConnectorUsage = async (slug, params = {}) => {
   const query = new URLSearchParams()
   if (params.status) query.set('status', params.status)
   if (params.actor_uid) query.set('actor_uid', params.actor_uid)
-  if (params.page) query.set('page', String(params.page))
-  if (params.page_size) query.set('page_size', String(params.page_size))
+  if (params.created_from) query.set('created_from', params.created_from)
+  if (params.created_to) query.set('created_to', params.created_to)
+  if (params.workflow_run_id) query.set('workflow_run_id', String(params.workflow_run_id))
+  if (params.page) query.set('offset', String((params.page - 1) * (params.page_size || 20)))
+  if (params.page_size) query.set('limit', String(params.page_size))
   const qs = query.toString()
   return apiAdminGet(
     `${ADMIN_BASE}/${encodeURIComponent(slug)}/usage${qs ? '?' + qs : ''}`,

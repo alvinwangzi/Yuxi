@@ -16,6 +16,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "auth: marks tests that require authentication")
     config.addinivalue_line("markers", "integration: marks tests that hit the live API service")
     config.addinivalue_line("markers", "e2e: marks tests that exercise an end-to-end workflow")
+    config.addinivalue_line("markers", "e2e_smoke: 确定性主链路与连接器消费验收")
     config.addinivalue_line("markers", "slow: marks tests as slow")
 
 

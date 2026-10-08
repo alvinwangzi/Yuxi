@@ -301,6 +301,15 @@ export function apiAdminPut(url, data = {}, options = {}, responseType = 'json')
   return apiPut(url, data, options, true, responseType)
 }
 
+export function apiAdminPatch(url, data = {}, options = {}, responseType = 'json') {
+  checkAdminPermission()
+  return apiRequest(url, {
+    method: 'PATCH',
+    body: data instanceof FormData ? data : JSON.stringify(data),
+    ...options
+  }, true, responseType)
+}
+
 export function apiSuperAdminPut(url, data = {}, options = {}, responseType = 'json') {
   checkSuperAdminPermission()
   return apiPut(url, data, options, true, responseType)

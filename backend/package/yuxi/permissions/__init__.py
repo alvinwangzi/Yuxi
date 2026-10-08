@@ -1,5 +1,7 @@
 """跨资源权限能力。"""
 
+from yuxi.permissions.connector_permission import connector_scope_matches
+
 from yuxi.permissions.resource_permission import (
     AGENT_PERMISSION_POLICY,
     KNOWLEDGE_BASE_PERMISSION_POLICY,
@@ -17,6 +19,7 @@ from yuxi.permissions.resource_permission import (
 )
 
 __all__ = [
+    "connector_scope_matches",
     "AGENT_PERMISSION_POLICY",
     "KNOWLEDGE_BASE_PERMISSION_POLICY",
     "SKILL_PERMISSION_POLICY",

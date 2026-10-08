@@ -26,7 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from yuxi.storage.minio.client import normalize_public_minio_url
-from yuxi.utils.datetime_utils import duration_ms, format_utc_datetime, utc_now_naive
+from yuxi.utils.datetime_utils import duration_ms, format_utc_datetime, utc_now_naive, utc_now
 
 Base = declarative_base()
 
@@ -1564,11 +1564,11 @@ class WorkflowRun(Base):
     resume_state = Column(JSON_VALUE, nullable=True, comment="恢复游标：已完成步骤、执行标识、待审批调用")
     resume_generation = Column(Integer, nullable=False, default=0, comment="恢复代数")
     dispatch_pending = Column(Boolean, nullable=False, default=False, comment="是否有待补投递的步骤")
-    next_dispatch_at = Column(DateTime, nullable=True, comment="下次投递时间")
+    next_dispatch_at = Column(DateTime(timezone=True), nullable=True, comment="下次投递时间")
     owner_id = Column(String(128), nullable=True, comment="当前 owner run/worker 标识")
     owner_attempt = Column(String(64), nullable=True, comment="当前 owner attempt 标识")
-    lease_expires_at = Column(DateTime, nullable=True, comment="owner lease 过期时间")
-    heartbeat_at = Column(DateTime, nullable=True, comment="最后一次心跳时间")
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, comment="owner lease 过期时间")
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True, comment="最后一次心跳时间")
 
     created_by = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=utc_now_naive)
@@ -1626,7 +1626,7 @@ class WorkflowStepRun(Base):
 
     step_execution_id = Column(String(128), nullable=True, comment="当前步骤执行标识，循环新激活生成新值")
     execution_count = Column(Integer, nullable=False, default=0, comment="步骤激活次数")
-    pending_connector_invocation_id = Column(Integer, nullable=True, comment="待处理的连接器调用 ID")
+    pending_connector_invocation_id = Column(String(36), nullable=True, comment="待处理的连接器调用 UUID")
     agent_request_id = Column(String(64), nullable=True, comment="关联 Agent 请求 ID")
     agent_run_id = Column(String(64), nullable=True, comment="关联 Agent 运行 ID")
     agent_thread_id = Column(String(64), nullable=True, comment="关联 Agent 线程 ID")
@@ -1748,9 +1748,9 @@ class Connector(Base):
 
     created_by = Column(String(64), nullable=True)
     updated_by = Column(String(64), nullable=True)
-    created_at = Column(DateTime, default=utc_now_naive)
-    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
-    deleted_at = Column(DateTime, nullable=True, comment="tombstone 标记，非空表示已删除")
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    deleted_at = Column(DateTime(timezone=True), nullable=True, comment="tombstone 标记，非空表示已删除")
 
     credentials = relationship("ConnectorCredential", back_populates="connector", lazy="selectin")
     operations = relationship("ConnectorOperation", back_populates="connector", lazy="selectin")
@@ -1796,7 +1796,7 @@ class ConnectorCredential(Base):
     credential_key = Column(String(128), nullable=False, comment="凭据标识")
     credential_value = Column(LargeBinary, nullable=False, comment="Fernet 加密后的凭据值")
     key_id = Column(String(64), nullable=True, comment="加密使用的 key_id，支持轮换")
-    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     connector = relationship("Connector", back_populates="credentials")
 
@@ -1845,8 +1845,8 @@ class ConnectorOperation(Base):
     retry_policy = Column(JSON_VALUE, nullable=True, comment="重试策略配置")
     remote_idempotency = Column(JSON_VALUE, nullable=True, comment="远端幂等性配置")
 
-    created_at = Column(DateTime, default=utc_now_naive)
-    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     connector = relationship("Connector", back_populates="operations")
 
@@ -1882,6 +1882,22 @@ class ConnectorUsageLog(Base):
 
     __tablename__ = "connector_usage_logs"
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('awaiting_approval','prepared','running','succeeded',"
+            "'failed','rejected','cancelled','unknown')",
+            name="ck_connector_logs_status",
+        ),
+        CheckConstraint(
+            "remote_outcome IS NULL OR remote_outcome IN ('not_sent','succeeded','failed','unknown')",
+            name="ck_connector_logs_outcome",
+        ),
+        CheckConstraint("actor_uid <> ''", name="ck_connector_logs_actor"),
+        CheckConstraint("operation_type IN ('read','write')", name="ck_connector_logs_operation_type"),
+        CheckConstraint("consumer_type IN ('agent','workflow','admin_test')", name="ck_connector_logs_consumer"),
+        CheckConstraint(
+            "approval_policy IS NULL OR approval_policy IN ('required','preauthorized')",
+            name="ck_connector_logs_approval",
+        ),
         Index("ix_connector_usage_logs_actor_created", "actor_uid", "created_at"),
         Index("ix_connector_usage_logs_connector_created", "connector_id", "created_at"),
         Index("ix_connector_usage_logs_status_lease", "status", "lease_expires_at"),
@@ -1920,8 +1936,8 @@ class ConnectorUsageLog(Base):
                             comment="not_sent/succeeded/failed/unknown")
     approval_policy = Column(String(20), nullable=True)
     approved_by = Column(String(64), nullable=True)
-    approved_at = Column(DateTime, nullable=True)
-    approval_expires_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    approval_expires_at = Column(DateTime(timezone=True), nullable=True)
     approval_digest = Column(String(128), nullable=True, comment="审批绑定的参数+版本摘要")
     rejected_by = Column(String(64), nullable=True)
     rejection_reason = Column(Text, nullable=True)
@@ -1941,12 +1957,12 @@ class ConnectorUsageLog(Base):
 
     owner_id = Column(String(128), nullable=True, comment="当前 owner worker/run 标识")
     owner_attempt = Column(String(64), nullable=True, comment="当前 owner attempt 标识")
-    lease_expires_at = Column(DateTime, nullable=True)
-    heartbeat_at = Column(DateTime, nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=utc_now_naive, index=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     connector = relationship("Connector", foreign_keys=[connector_id])
     operation = relationship("ConnectorOperation", foreign_keys=[operation_id])
@@ -2015,8 +2031,8 @@ class ConnectorOperationAttempt(Base):
     attempt_no = Column(Integer, nullable=False, comment="尝试序号，从 1 开始")
     owner_attempt = Column(String(64), nullable=True, comment="此次尝试的 owner 标识")
 
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     send_state = Column(String(20), nullable=True,
                         comment="not_started/sending/response_received/uncertain")
@@ -2026,7 +2042,7 @@ class ConnectorOperationAttempt(Base):
     error_summary = Column(Text, nullable=True)
     duration_ms = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime, default=utc_now_naive)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
 
     invocation = relationship("ConnectorUsageLog", back_populates="attempts")
 

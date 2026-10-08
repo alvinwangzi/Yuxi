@@ -48,6 +48,20 @@ class TestOutboundSecurityPolicy:
         policy = PUBLIC_ONLY_POLICY
         assert policy.is_blocked(ipaddress.ip_address("127.0.0.1"))
 
+    @pytest.mark.parametrize(
+        "target",
+        ["127.0.0.1", "::1", "169.254.1.1", "fe80::1", "224.0.0.1", "ff02::1", "0.0.0.0", "::", "::ffff:127.0.0.1"],
+    )
+    def test_explicit_cidr_cannot_allow_special_addresses(self, target):
+        """显式内网允许范围不能授权回环、链路、组播或未指定地址。"""
+        policy = OutboundSecurityPolicy(
+            allow_private_cidrs=(
+                ipaddress.ip_network("0.0.0.0/0"),
+                ipaddress.ip_network("::/0"),
+            )
+        )
+        assert policy.is_blocked(ipaddress.ip_address(target))
+
     def test_ipv6_metadata_blocked(self):
         policy = PUBLIC_ONLY_POLICY
         assert policy.is_blocked(ipaddress.ip_address("fd00:ec2::254"))

@@ -24,6 +24,10 @@ LARGE_TOOL_CALL_ID = "call-large-tool-result"
 BLOCKING_REQUEST_TOKENS: set[str] = set()
 BLOCKING_REQUEST_TOKENS_LOCK = Lock()
 SUBAGENT_GATES: dict[str, Event] = {}
+CONNECTOR_RECORDS: dict[str, dict] = {}
+CONNECTOR_RECEIPTS: dict[str, list[str]] = {}
+CONNECTOR_RESPONSE_DELAYS: dict[str, float] = {}
+CONNECTOR_LOCK = Lock()
 
 
 def validate_request(authorization: str | None, request: dict) -> str | None:
@@ -60,6 +64,34 @@ def validate_request(authorization: str | None, request: dict) -> str | None:
     if LARGE_TOOL_RESULT_MARKER in serialized_messages and "execute" not in tool_names:
         return "execute_tool_missing"
     tool_messages = [message for message in messages if isinstance(message, dict) and message.get("role") == "tool"]
+    connector_tool = re.search(r"DETERMINISTIC_CONNECTOR_TOOL:([\w-]+)", serialized_messages)
+    if connector_tool:
+        if connector_tool.group(1) not in tool_names:
+            return "connector_tool_missing"
+        expected_value = re.search(r"CONNECTOR_VALUE:([\w-]+)", serialized_messages).group(1)
+        for message in tool_messages:
+            if message.get("tool_call_id") != "call-connector":
+                continue
+            try:
+                result = json.loads(message["content"])
+                expected_error = re.search(r"CONNECTOR_EXPECT_ERROR:([\w-]+)", serialized_messages)
+                if expected_error:
+                    if (
+                        result.get("invocation_id")
+                        and result.get("error_code") == expected_error.group(1) == "approval_rejected"
+                        and result.get("remote_outcome") == "not_sent"
+                    ):
+                        return None
+                    return "connector_tool_result_missing"
+                if (
+                    result.get("invocation_id")
+                    and result.get("result", {}).get("record", {}).get("value") == expected_value
+                ):
+                    return None
+            except (TypeError, ValueError):
+                pass
+            return "connector_tool_result_missing"
+        return "connector_tool_result_missing" if tool_messages else None
     if subagent_child or subagent_parent:
         expected_call = "call-subagent-write" if subagent_child else "call-subagent-start"
         if (
@@ -90,7 +122,7 @@ def validate_request(authorization: str | None, request: dict) -> str | None:
     return None
 
 
-def _stream_payloads(model: str, messages: list[dict]) -> list[dict]:
+def stream_payloads(model: str, messages: list[dict]) -> list[dict]:
     serialized_messages = json.dumps(messages, ensure_ascii=False)
     common = {
         "id": "chatcmpl-yuxi-deterministic",
@@ -132,7 +164,14 @@ def _stream_payloads(model: str, messages: list[dict]) -> list[dict]:
     large_result = LARGE_TOOL_RESULT_MARKER in serialized_messages
     tool_call_id = LARGE_TOOL_CALL_ID if large_result else EXPECTED_TOOL_CALL_ID
     tool_name = "execute" if large_result else EXPECTED_PRELOADED_TOOL
-    if waiting_call:
+    connector_tool = re.search(r"DETERMINISTIC_CONNECTOR_TOOL:([\w-]+)", serialized_messages)
+    if connector_tool:
+        tool_call_id, tool_name = "call-connector", connector_tool.group(1)
+        params = {"record_id": re.search(r"CONNECTOR_RECORD:([\w-]+)", serialized_messages).group(1)}
+        if tool_name.endswith("__write"):
+            params["value"] = re.search(r"CONNECTOR_VALUE:([\w-]+)", serialized_messages).group(1)
+        tool_arguments = json.dumps(params)
+    elif waiting_call:
         started = json.loads(tool_results[waiting_call])
         tool_call_id, tool_name = f"await-{waiting_call}", "subagent_await"
         tool_arguments = json.dumps({"run_id": started["run_id"]})
@@ -204,6 +243,22 @@ class ReplayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/connector/"):
+            record_id = parsed.path.rsplit("/", 1)[-1]
+            with CONNECTOR_LOCK:
+                if parsed.path.startswith("/connector/ledger/"):
+                    payload = {
+                        "requests": list(CONNECTOR_RECEIPTS.get(record_id, [])),
+                        "record": CONNECTOR_RECORDS.get(record_id),
+                    }
+                elif record_id in CONNECTOR_RECORDS:
+                    CONNECTOR_RECEIPTS.setdefault(record_id, []).append("GET")
+                    payload = {"record": dict(CONNECTOR_RECORDS[record_id])}
+                else:
+                    self._write_json(404, {"error": "fixture_missing"})
+                    return
+            self._write_json(200, payload)
+            return
         if parsed.path == "/release-subagent":
             token = parse_qs(parsed.query).get("token", [""])[0]
             with BLOCKING_REQUEST_TOKENS_LOCK:
@@ -222,6 +277,33 @@ class ReplayHandler(BaseHTTPRequestHandler):
         self._write_json(404, {"error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path.startswith("/connector/"):
+            length = int(self.headers.get("content-length", "0"))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            record_id = str(body.get("record_id") or self.path.rsplit("/", 1)[-1])
+            delay = body.get("response_delay_seconds", 0)
+            if type(delay) not in (int, float) or not 0 <= delay <= 3:
+                self._write_json(400, {"error": "fixture_delay_invalid"})
+                return
+            with CONNECTOR_LOCK:
+                if self.path == "/connector/fixtures":
+                    CONNECTOR_RECORDS[record_id] = {"id": record_id, "value": body["value"]}
+                    CONNECTOR_RECEIPTS[record_id] = []
+                    CONNECTOR_RESPONSE_DELAYS[record_id] = delay
+                else:
+                    if record_id not in CONNECTOR_RECORDS:
+                        self._write_json(404, {"error": "fixture_missing"})
+                        return
+                    CONNECTOR_RECEIPTS[record_id].append("POST")
+                    CONNECTOR_RECORDS[record_id]["value"] = body["value"]
+                payload = {"record": dict(CONNECTOR_RECORDS[record_id])}
+                response_delay = (
+                    0 if self.path == "/connector/fixtures" else CONNECTOR_RESPONSE_DELAYS.get(record_id, 0)
+                )
+            if response_delay:
+                time.sleep(response_delay)
+            self._write_json(200, payload)
+            return
         if self.path.rstrip("/") != "/v1/chat/completions":
             self._write_json(404, {"error": "not_found"})
             return
@@ -265,7 +347,7 @@ class ReplayHandler(BaseHTTPRequestHandler):
                 return
         blocking_match = re.search(rf"{BLOCK_BEFORE_RESPONSE_MARKER}:([0-9a-f-]+)", serialized_messages)
         model = str(request["model"])
-        payloads = _stream_payloads(model, messages)
+        payloads = stream_payloads(model, messages)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -286,6 +368,18 @@ class ReplayHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        """只清理本测试显式创建的业务 fixture。"""
+        if not self.path.startswith("/connector/fixtures/"):
+            self._write_json(404, {"error": "not_found"})
+            return
+        record_id = self.path.rsplit("/", 1)[-1]
+        with CONNECTOR_LOCK:
+            CONNECTOR_RECORDS.pop(record_id, None)
+            CONNECTOR_RECEIPTS.pop(record_id, None)
+            CONNECTOR_RESPONSE_DELAYS.pop(record_id, None)
+        self._write_json(200, {"deleted": True})
 
     def _write_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode()
