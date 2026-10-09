@@ -821,7 +821,7 @@ watch(
           showEditModal()
           return
         }
-        await router.replace({ path: '/extensions', query: { tab: 'knowledge' } })
+        await router.replace({ path: '/knowledge' })
         return
       }
       await detectVirtualFolders()
@@ -878,7 +878,7 @@ watch(
 )
 
 const backToDatabase = () => {
-  router.push({ path: '/extensions', query: { tab: 'knowledge' } })
+  router.push({ path: '/knowledge' })
 }
 
 const copyDatabaseId = async () => {

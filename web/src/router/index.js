@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import BlankLayout from '@/layouts/BlankLayout.vue'
 import { useUserStore } from '@/stores/user'
 import { useAgentStore } from '@/stores/agent'
+import { redirectLegacyExtensions } from './legacy_extensions'
 
 const AppLayout = () => import('@/layouts/AppLayout.vue')
 
@@ -143,19 +144,33 @@ const router = createRouter({
     {
       path: '/extensions',
       name: 'extensions',
+      redirect: redirectLegacyExtensions
+    },
+    {
+      path: '/extensions/knowledgebase/:kbId',
+      redirect: to => ({ name: 'ExtensionKnowledgeBaseDetail', params: to.params, query: to.query, hash: to.hash })
+    },
+    {
+      path: '/extensions/knowledgebase/:kbId/evaluation/:datasetId',
+      redirect: to => ({ name: 'ExtensionEvaluationBenchmarkDetail', params: to.params, query: to.query, hash: to.hash })
+    },
+    {
+      path: '/knowledge',
+      name: 'knowledge',
       component: AppLayout,
       children: [
         {
           path: '',
-          name: 'ExtensionsComp',
-          component: () => import('../views/ExtensionsView.vue'),
+          name: 'KnowledgeComp',
+          component: () => import('../views/KnowledgeView.vue'),
           meta: {
             keepAlive: false,
-            requiresAuth: true
+            requiresAuth: true,
+            requiresAdmin: true
           },
           children: [
             {
-              path: 'knowledgebase/:kbId',
+              path: ':kbId',
               name: 'ExtensionKnowledgeBaseDetail',
               component: () => import('../views/DataBaseInfoView.vue'),
               meta: {
@@ -165,7 +180,7 @@ const router = createRouter({
               }
             },
             {
-              path: 'knowledgebase/:kbId/evaluation/:datasetId',
+              path: ':kbId/evaluation/:datasetId',
               name: 'ExtensionEvaluationBenchmarkDetail',
               component: () => import('../views/EvaluationBenchmarkDetailView.vue'),
               meta: {

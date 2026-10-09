@@ -196,8 +196,8 @@ const mainList = computed(() => {
 
   items.push({
     name: '知识库',
-    path: '/extensions',
-    activePaths: ['/extensions'],
+    path: '/knowledge',
+    activePaths: ['/knowledge'],
     icon: LibraryBig,
     activeIcon: LibraryBig
   })

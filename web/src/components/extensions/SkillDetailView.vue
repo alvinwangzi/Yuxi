@@ -584,7 +584,7 @@ const removeDependency = (group, value) => {
 }
 
 const goBack = () => {
-  router.push({ path: '/extensions', query: { tab: 'skills' } })
+  router.push({ path: '/skills' })
 }
 
 const confirmDiscardFileDraft = (includeSettings = false) => {
@@ -854,7 +854,7 @@ const confirmDeleteSkill = () => {
         await skillApi.deleteSkill(target.slug)
         skillDeleted.value = true
         message.success(`已${actionText}`)
-        router.push({ path: '/extensions', query: { tab: 'skills' } })
+        router.push({ path: '/skills' })
       } catch {
         message.error(`${actionText}失败`)
       }

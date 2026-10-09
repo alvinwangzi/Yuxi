@@ -8,17 +8,7 @@
       :loading="activeChildLoading"
       :show-border="true"
       aria-label="技能与连接器视图切换"
-    >
-      <template #actions>
-        <a
-          v-if="userStore.isAdmin"
-          class="connector-manage-link"
-          @click.prevent="router.push({ path: '/extensions', query: { tab: 'connectors' } })"
-        >
-          业务系统连接器
-        </a>
-      </template>
-    </PageHeader>
+    />
 
     <div v-if="!isDetailPage" class="skills-content">
       <div v-if="activeTab === 'skills'" class="tab-panel">
@@ -46,6 +36,9 @@
       <div v-if="userStore.isAdmin && activeTab === 'mcp'" class="tab-panel">
         <McpCardList ref="mcpRef" />
       </div>
+      <div v-if="userStore.isAdmin && activeTab === 'connectors'" class="tab-panel">
+        <ConnectorCardList ref="connectorsRef" />
+      </div>
       <div v-if="userStore.isAdmin && activeTab === 'channels'" class="tab-panel">
         <ChannelCardList ref="channelsRef" />
       </div>
@@ -61,6 +54,7 @@ import { useRoute, useRouter } from 'vue-router'
 import ToolsCardList from '@/components/extensions/ToolsCardList.vue'
 import McpCardList from '@/components/extensions/McpCardList.vue'
 import SkillCardList from '@/components/extensions/SkillCardList.vue'
+import ConnectorCardList from '@/components/extensions/ConnectorCardList.vue'
 import ChannelCardList from '@/components/extensions/ChannelCardList.vue'
 import SkillMarketPanel from '@/components/marketplace/SkillMarketPanel.vue'
 import MarketApprovalPanel from '@/components/marketplace/MarketApprovalPanel.vue'
@@ -76,12 +70,14 @@ const skillsRef = ref(null)
 const toolsRef = ref(null)
 const mcpRef = ref(null)
 const channelsRef = ref(null)
+const connectorsRef = ref(null)
 
 const adminExtensionTabs = computed(() => [
   { key: 'skills', label: '技能' },
   { key: 'tools', label: '工具' },
   { key: 'mcp', label: 'MCP' },
-  { key: 'channels', label: '渠道' }
+  { key: 'channels', label: '渠道' },
+  { key: 'connectors', label: '连接器' }
 ])
 const userExtensionTabs = [{ key: 'skills', label: '技能' }]
 const extensionTabs = computed(() =>
@@ -117,7 +113,8 @@ const activeChildLoading = computed(() => {
     skills: skillsRef,
     tools: toolsRef,
     mcp: mcpRef,
-    channels: channelsRef
+    channels: channelsRef,
+    connectors: connectorsRef
   }
   const child = refMap[activeTab.value]
   return child?.value?.loading || false

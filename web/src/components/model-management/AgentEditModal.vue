@@ -318,13 +318,13 @@ const handleNavigateRequest = (kind) => {
   setTimeout(() => {
     switch (kind) {
       case 'mcps':
-        router.push({ path: '/extensions', query: { tab: 'mcp' } })
+        router.push({ path: '/skills', query: { tab: 'mcp' } })
         break
       case 'subagents':
         router.push({ path: '/agent-manage', query: { tab: 'agents' } })
         break
       case 'connectors':
-        router.push({ path: '/extensions', query: { tab: 'connectors' } })
+        router.push({ path: '/skills', query: { tab: 'connectors' } })
         break
     }
   }, 150)
