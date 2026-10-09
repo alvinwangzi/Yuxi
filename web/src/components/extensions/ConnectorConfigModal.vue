@@ -10,6 +10,19 @@
         </a-select>
       </a-form-item>
       <a-form-item label="描述"><a-textarea v-model:value="form.description" :rows="2" /></a-form-item>
+      <details v-if="form.connector_type === 'feishu_bitable_crm'" class="connector-guide">
+        <summary>飞书 CRM 配置与测试指南</summary>
+        <ol>
+          <li>在飞书开放平台创建企业自建应用，获取 App ID、App Secret；开通多维表格读写 API 权限并发布应用。随后在 CRM 多维表格的“添加文档应用”中添加该应用，授予相应阅读或编辑权限。</li>
+          <li>Base URL 和允许的来源地址均填写 <code>https://open.feishu.cn</code>，内网 CIDR 留空。应用凭据只填下方认证密码框，不放进附加配置。</li>
+          <li>从 <code>/base/表格标识?table=数据表标识</code> 链接获取 app_token，附加配置填写 <code>{"app_token":"表格标识"}</code>。若链接为 /wiki/，需通过飞书知识库节点接口获取实际表格标识，不能直接使用节点标识。</li>
+          <li>首次保存前关闭“启用状态”，先保存草稿。重新编辑，点击“读取表和字段目录”，选择客户表和商机表并保存，再读取目录、勾选字段。调用参数名自动生成，历史默认 ID 名称可批量优化。</li>
+          <li>测试账号 UID 位于左下角头像菜单的“ID”。读取范围可填写 <code>{"access_level":"user","user_uids":["测试账号ID"]}</code>；写入范围先保持 <code>{"access_level":"deny"}</code>。完成表和字段配置后启用并保存。</li>
+          <li>在测试 Agent 的资源配置中选择此连接器，先查询前 5 条客户记录，与飞书核对。需要写入测试时再配置指定用户的写入范围，使用测试记录并完成调用审批。</li>
+        </ol>
+        <p>若保存提示校验失败，先检查 app_token 是否只填标识，以及启用时客户表、商机表是否都已配置。读取目录无权限时，检查应用 API 权限是否已发布，以及目标表格是否已添加文档应用。</p>
+        <a href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">飞书开放平台</a>
+      </details>
       <a-form-item label="启用状态"><a-switch v-model:checked="form.enabled" /></a-form-item>
       <a-divider>目标与权限</a-divider>
       <a-form-item label="Base URL" required><a-input v-model:value="form.base_url" placeholder="https://api.example.com" /></a-form-item>
@@ -22,6 +35,10 @@
         <a-alert type="info" message="先保存停用草稿、Base 标识和完整应用凭据，再读取表目录；选择表并保存后，可读取字段并配置调用参数名。" />
         <a-button :disabled="!isEdit" :loading="metadataLoading" @click="loadMetadata">读取表和字段目录</a-button>
         <a-alert v-if="metadataError" type="error" :message="metadataError" />
+        <p class="credential-hint">勾选字段后自动生成调用参数名，无需逐项填写。已有名称保持不变。</p>
+        <a-checkbox v-model:checked="showAdvancedNames">高级：手动修改调用参数名</a-checkbox>
+        <a-button v-if="Object.keys(metadataFields).length" @click="optimizeDefaultNames">优化默认参数名</a-button>
+        <p v-if="Object.keys(metadataFields).length" class="credential-hint">将已选字段的默认 ID 名称批量改为常见 CRM 名称，保留手工名称；点击确定后保存。</p>
         <template v-for="kind in ['customer', 'opportunity']" :key="kind">
           <a-form-item v-if="metadataTables.length" :label="kind === 'customer' ? '客户表' : '商机表'">
             <a-select :value="metadataConfig[kind + '_table_id']" :options="metadataTables.map(table => ({ value: table.table_id, label: table.name }))" @change="selectMetadataTable(kind, $event)" />
@@ -30,7 +47,8 @@
             <a-checkbox :checked="selectedField(kind, field)" :disabled="!supportedFieldTypes.includes(field.type)" @change="toggleField(kind, field, $event.target.checked)">
               {{ field.field_name }}（{{ fieldTypeLabels[field.type] || '不支持写入' }}）
             </a-checkbox>
-            <a-input v-if="selectedField(kind, field)" :value="logicalFieldName(kind, field)" placeholder="调用参数名" @change="renameField(kind, field, $event.target.value)" />
+            <a-input v-if="selectedField(kind, field) && showAdvancedNames" :value="logicalFieldName(kind, field)" placeholder="调用参数名" @change="renameField(kind, field, $event.target.value)" />
+            <span v-else-if="selectedField(kind, field)" class="credential-hint">{{ logicalFieldName(kind, field) }}</span>
           </div>
         </template>
       </template>
@@ -57,6 +75,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { createConnector, updateConnector, discoverConnectorMetadata } from '@/apis/connector_api'
 import { connectorPayload, parseObject } from '@/utils/connector_forms'
+import { connectorFieldName, validConnectorFieldName, optimizeConnectorFieldNames } from '@/utils/connector_field_names'
 const TYPE_LABELS = { generic_rest: '通用 REST', salesforce: 'Salesforce', feishu_bitable_crm: '飞书多维表格' }
 const props = defineProps({ open: Boolean, connector: Object, connectorTypes: { type: Array, default: () => [] } })
 const emit = defineEmits(['update:open', 'saved'])
@@ -66,6 +85,7 @@ const revision = ref(null)
 const deleteKeys = ref([])
 const metadataLoading = ref(false)
 const metadataError = ref('')
+const showAdvancedNames = ref(false)
 const metadataTables = ref([])
 const metadataFields = ref({})
 let metadataGeneration = 0
@@ -85,6 +105,7 @@ watch(() => props.open, value => {
   metadataGeneration++
   metadataLoading.value = false
   if (!value) return
+  showAdvancedNames.value = false
   const connector = props.connector || {}
   const { base_url = '', auth_type = 'none', allowed_origins = [], allowed_private_cidrs = [], ...extra } = connector.config || {}
   Object.assign(form, { name: connector.name || '', slug: connector.slug || '', connector_type: connector.connector_type || '',
@@ -125,7 +146,15 @@ function selectMetadataTable(kind, id) {
   metadataFields.value = {}
 }
 function logicalFieldName(kind, field) {
-  return Object.entries(metadataConfig.value[kind + '_fields'] || {}).find(([, id]) => id === field.field_id || id === field.field_name)?.[0] || field.field_id
+  return connectorFieldName(field, metadataConfig.value[kind + '_fields'] || {})
+}
+function optimizeDefaultNames() {
+  let config = { ...metadataConfig.value }
+  for (const kind of ['customer', 'opportunity']) {
+    config = optimizeConnectorFieldNames(config, kind, metadataFields.value[config[kind + '_table_id']] || [])
+  }
+  form.config_json = JSON.stringify(config, null, 2)
+  message.success('默认参数名已优化，请保存配置')
 }
 function selectedField(kind, field) {
   return Object.values(metadataConfig.value[kind + '_fields'] || {}).some(id => id === field.field_id || id === field.field_name)
@@ -140,12 +169,12 @@ function toggleField(kind, field, checked) {
   form.config_json = JSON.stringify({ ...config, [kind + '_fields']: fields, [kind + '_field_types']: types }, null, 2)
 }
 function renameField(kind, field, name) {
-  if (!name.trim() || name === 'runtime') { message.warning('请填写有效调用参数名'); return }
+  if (!validConnectorFieldName(name)) { message.warning('调用参数名须以英文字母开头，仅含字母、数字和下划线，且不能使用保留名称'); return }
   const config = { ...metadataConfig.value }
   const fields = { ...(config[kind + '_fields'] || {}) }
   const types = { ...(config[kind + '_field_types'] || {}) }
   const old = logicalFieldName(kind, field)
-  if (name !== old && fields[name]) { message.warning('调用参数名已存在'); return }
+  if (name !== old && Object.hasOwn(fields, name)) { message.warning('调用参数名已存在'); return }
   delete fields[old]; delete types[old]
   fields[name] = field.field_id; types[name] = field.type
   form.config_json = JSON.stringify({ ...config, [kind + '_fields']: fields, [kind + '_field_types']: types }, null, 2)
@@ -171,6 +200,10 @@ async function handleSave() {
 <style scoped>
 .connector-config-form { max-height: 68vh; overflow-y: auto; padding-right: 8px; }
 .credential-hint { margin-top: 4px; color: var(--gray-500); font-size: 12px; }
+.connector-guide { margin-bottom: 16px; padding: 12px; border: 1px solid var(--gray-150); border-radius: 8px; }
+.connector-guide summary { cursor: pointer; color: var(--main-color); }
+.connector-guide li { margin: 8px 0; }
+.connector-guide code { overflow-wrap: anywhere; }
 .metadata-field-row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
 .metadata-field-row .ant-input { max-width: 180px; }
 @media (max-width: 600px) { .metadata-field-row { flex-wrap: wrap; } }
