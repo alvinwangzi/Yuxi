@@ -72,9 +72,16 @@
               <a-menu-item @click="openOperationEditor(conn)">操作管理</a-menu-item>
               <a-menu-item @click="openUsagePanel(conn)">调用记录</a-menu-item>
               <a-menu-item @click="openApprovalPanel(conn)">待审批调用</a-menu-item>
+              <a-menu-divider />
+              <a-menu-item danger :disabled="!!actionLoadingSlug" @click="confirmDelete(conn)">删除连接器</a-menu-item>
             </a-menu>
           </template>
           <template #action>
+            <span @click.stop>
+              <a-switch :checked="conn.enabled" :loading="actionLoadingSlug === conn.slug"
+                :disabled="!!actionLoadingSlug" :aria-label="conn.enabled ? '停用连接器' : '启用连接器'"
+                checked-children="开" un-checked-children="关" @change="toggleConnector(conn, $event)" />
+            </span>
             <button
               type="button"
               class="mcp-card-action"
@@ -83,16 +90,6 @@
               @click.stop="openDetail(conn)"
             >
               <Settings :size="15" class="action-icon" />
-            </button>
-            <button
-              type="button"
-              class="mcp-card-action mcp-card-action-danger"
-              :disabled="actionLoadingSlug === conn.slug"
-              aria-label="删除连接器"
-              @click.stop="confirmDelete(conn)"
-            >
-              <Check :size="15" class="action-icon action-icon-check" />
-              <Trash2 :size="15" class="action-icon action-icon-trash" />
             </button>
           </template>
         </InfoCard>
@@ -135,12 +132,13 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import { Check, Plus, RefreshCw, Settings, Trash2 } from '@lucide/vue'
+import { Plus, RefreshCw, Settings } from '@lucide/vue'
 import {
   getConnectors,
   getConnector,
   getConnectorTypes,
   deleteConnector,
+  updateConnector,
 } from '@/apis/connector_api'
 import ExtensionCardGrid from './ExtensionCardGrid.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
@@ -263,6 +261,24 @@ function confirmDelete(conn) {
       }
     },
   })
+}
+
+async function toggleConnector(conn, enabled) {
+  /** 启停使用服务器版本校验，失败时回读当前状态。 */
+  if (actionLoadingSlug.value) return
+  actionLoadingSlug.value = conn.slug
+  try {
+    const result = await updateConnector(conn.slug, { enabled, expected_revision: conn.revision })
+    if (!result.success || typeof result.data?.enabled !== 'boolean') throw new Error('启停状态保存失败')
+    conn.enabled = result.data.enabled
+    conn.revision = result.data.revision
+    message.success(conn.enabled ? '连接器已启用' : '连接器已停用')
+  } catch (error) {
+    message.error(error.message || '启停状态保存失败，请刷新后重试')
+  } finally {
+    await fetchConnectors()
+    actionLoadingSlug.value = ''
+  }
 }
 
 async function fetchConnectors() {
@@ -390,28 +406,7 @@ defineExpose({
     opacity: 0.45;
   }
 
-  &.mcp-card-action-danger {
-    color: var(--color-success-700);
 
-    .action-icon-trash {
-      display: none;
-    }
-
-    &:hover,
-    &:focus {
-      border-color: var(--color-error-100);
-      background: var(--color-error-50);
-      color: var(--color-error-700);
-
-      .action-icon-check {
-        display: none;
-      }
-
-      .action-icon-trash {
-        display: block;
-      }
-    }
-  }
 }
 
 .action-icon {

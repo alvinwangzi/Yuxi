@@ -96,14 +96,14 @@
             <a-tag v-if="ch.agent_slug">{{ ch.agent_slug }}</a-tag>
           </template>
           <template #action>
-            <button
-              type="button"
-              class="mcp-card-action mcp-card-action-danger"
-              :aria-label="'删除渠道'"
-              @click.stop="handleDeleteChannel(ch)"
-            >
-              <Trash2 :size="15" class="action-icon action-icon-trash" />
-            </button>
+            <a-tag :color="ch.enabled ? 'green' : 'default'" :bordered="false">
+              {{ ch.enabled ? '已开启' : '已关闭' }}
+            </a-tag>
+          </template>
+          <template #card-more-action-corner>
+            <a-menu>
+              <a-menu-item danger @click="confirmDeleteChannel(ch)">删除渠道</a-menu-item>
+            </a-menu>
           </template>
         </InfoCard>
       </ExtensionCardGrid>
@@ -245,8 +245,8 @@
 
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
-import { message } from 'ant-design-vue'
-import { BookOpen, RefreshCw, Trash2 } from '@lucide/vue'
+import { message, Modal } from 'ant-design-vue'
+import { BookOpen, RefreshCw } from '@lucide/vue'
 import ExtensionCardGrid from './ExtensionCardGrid.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import { channelApi } from '@/apis/channel_api'
@@ -483,6 +483,15 @@ const handleEditChannel = (ch) => {
   formState.credentials = {}
   showCreateModal.value = true
   void fetchAgentOptions()
+}
+
+const confirmDeleteChannel = (ch) => {
+  /** 将删除留在菜单和确认步骤内，避免卡片误触直接删除。 */
+  Modal.confirm({
+    title: '删除渠道', content: `确定删除渠道“${ch.name || ch.slug}”吗？`,
+    okText: '删除', okType: 'danger', cancelText: '取消',
+    onOk: () => handleDeleteChannel(ch)
+  })
 }
 
 const handleDeleteChannel = async (ch) => {
