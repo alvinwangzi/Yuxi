@@ -168,7 +168,7 @@ async def list_agents(
         result["category_counts"] = category_counts
 
     if include_subagents:
-        sub_items = await repo.list_visible_subagents(user=current_user)
+        sub_items = await repo.list_visible_subagents(user=current_user, category_id=category_id)
         sub_agents = [
             await _serialize_agent(repo, item, current_user, backend_info_cache=backend_info_cache)
             for item in sub_items

@@ -143,6 +143,15 @@ async def import_role_as_agent(
 
     role_data = template.to_dict()
 
+    # 将角色模板分类映射到智能体分类（同 slug，不同 entity_type）
+    agent_category_id: int | None = None
+    cat_repo = CategoryRepository(db)
+    role_cat = await cat_repo.get_by_id(template.category_id)
+    if role_cat:
+        agent_cat = await cat_repo.get_by_slug("agent", role_cat.slug)
+        if agent_cat:
+            agent_category_id = agent_cat.id
+
     agent_repo = AgentRepository(db)
     try:
         agent = await agent_repo.create(
@@ -152,6 +161,7 @@ async def import_role_as_agent(
             description=template.description or f"从角色模板导入: {template.name}",
             icon=template.icon or "👤",
             config_json={"context": {"system_prompt": prompt}},
+            category_id=agent_category_id,
             created_by=str(user.uid),
             creator=user,
         )

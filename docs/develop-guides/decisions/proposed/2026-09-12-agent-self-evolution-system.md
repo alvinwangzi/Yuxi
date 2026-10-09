@@ -2,7 +2,7 @@
 
 状态：proposed
 类型：architecture
-Owner：`backend/package/yuxi/agents/`（Agent 运行时）、`backend/package/yuxi/services/`（领域服务）
+Owner：backend/package/yuxi/services/run_worker.py
 
 ## 问题
 
@@ -102,13 +102,13 @@ Agent 在大量对话中积累了可复用的工作流经验、用户偏好纠�
 
 | 验收主张 | 失败面 | 语义 Owner | 直接证据 / 命令 | 负向案例 | 当前结果 |
 |---|---|---|---|---|---|
-| AgentRun 完成后自动投递回顾 ARQ 任务 | 任务未投递或投递到错误队列 | `run_worker.py` | 运行 Agent 对话后检查 ARQ 队列 | AgentRun 失败时不应投递回顾任务 | 未实现 |
-| 回顾任务提取的用户偏好写入 Memory | 写入失败或写入错误用户 | `experience_review.py` | 检查 Memory 存储中新增的记录 | 对话中无用户偏好信号时不应产生 Memory 写入 | 未实现 |
-| 回顾任务提取的工作经验写入经验记录 | 写入失败或格式不符规范 | `experience_review.py` | 检查经验记录表中的新增条目 | 对话中无技术经验信号时不应产生记录 | 未实现 |
-| 质量守门过滤掉环境依赖失败 | 临时错误被错误沉淀 | 回顾 prompt | 构造含环境失败的对话，验证不产生经验记录 | —— | 未实现 |
-| 质量守门过滤掉未验证结论 | 失败尝试被包装为最佳实践 | 回顾 prompt | 构造未解决问题的对话，验证不产生"推荐方案" | —— | 未实现 |
-| 定期整理合并语义重复的经验 | 重复经验未被合并 | `experience_curator.py` | 手动插入两条语义重复记录，运行整理后验证合并 | 两条内容不同但主题相近的记录不应被强制合并 | 未实现 |
-| 定期整理归档过期经验 | 过期经验未被标记 | `experience_curator.py` | 插入超过 N 天未被引用的记录，验证标记为 stale | 最近被引用的记录不应被标记 | 未实现 |
+| AgentRun 完成后自动投递回顾 ARQ 任务 | 任务未投递或投递到错误队列 | `run_worker.py` | 运行 Agent 对话后检查 ARQ 队列 | AgentRun 失败时不应投递回顾任务 | Not run |
+| 回顾任务提取的用户偏好写入 Memory | 写入失败或写入错误用户 | `experience_review.py` | 检查 Memory 存储中新增的记录 | 对话中无用户偏好信号时不应产生 Memory 写入 | Not run |
+| 回顾任务提取的工作经验写入经验记录 | 写入失败或格式不符规范 | `experience_review.py` | 检查经验记录表中的新增条目 | 对话中无技术经验信号时不应产生记录 | Not run |
+| 质量守门过滤掉环境依赖失败 | 临时错误被错误沉淀 | 回顾 prompt | 构造含环境失败的对话，验证不产生经验记录 | —— | Not run |
+| 质量守门过滤掉未验证结论 | 失败尝试被包装为最佳实践 | 回顾 prompt | 构造未解决问题的对话，验证不产生"推荐方案" | —— | Not run |
+| 定期整理合并语义重复的经验 | 重复经验未被合并 | `experience_curator.py` | 手动插入两条语义重复记录，运行整理后验证合并 | 两条内容不同但主题相近的记录不应被强制合并 | Not run |
+| 定期整理归档过期经验 | 过期经验未被标记 | `experience_curator.py` | 插入超过 N 天未被引用的记录，验证标记为 stale | 最近被引用的记录不应被标记 | Not run |
 
 ## 风险
 

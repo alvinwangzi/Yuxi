@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.utils.auth_middleware import get_admin_user, get_db, get_required_user
 from yuxi.repositories.category_repository import CategoryRepository
 from yuxi.repositories.workflow_repository import WorkflowRepository
-from yuxi.repositories.agent_repository import AgentRepository, DEFAULT_SHARE_CONFIG
-from yuxi.storage.postgres.models_business import Agent, User, Workflow
+from yuxi.repositories.agent_repository import AgentRepository
+from yuxi.storage.postgres.models_business import User, Workflow
 from yuxi.utils.datetime_utils import utc_now_naive
 from yuxi.utils.logging_config import logger
 from yuxi.workflows import STEP_TYPES
@@ -148,8 +148,8 @@ async def list_selectable_workflows(
     管理员：返回所有非平台工作流
     普通用户：返回公司级 + 自己的个人级工作流
     """
-    workflows = await WorkflowRepository(db).list_workflows(limit=200, actor=user)
-    workflows = [w for w in workflows if w.scope != "platform"]
+    repo = WorkflowRepository(db)
+    workflows = await repo.list_selectable_for_user(user)
     return {
         "success": True,
         "data": [w.to_dict() for w in workflows],
@@ -162,37 +162,11 @@ async def get_workflow_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """获取工作流统计数据（用于页面头部徽章）。"""
-    from sqlalchemy import select, func
-
     repo = WorkflowRepository(db)
-    # 管理员看全部，非管理员只看公司级 + 个人级（自己的）
-    if user.role in ("admin", "superadmin"):
-        total = await repo.count_workflows()
-        platform_q = select(func.count(Workflow.id)).where(Workflow.scope == "platform")
-        platform = (await db.execute(platform_q)).scalar() or 0
-        company_q = select(func.count(Workflow.id)).where(Workflow.scope == "company")
-        company = (await db.execute(company_q)).scalar() or 0
-        personal_q = select(func.count(Workflow.id)).where(Workflow.scope == "personal")
-        personal = (await db.execute(personal_q)).scalar() or 0
-    else:
-        # 非管理员：公司级 + 自己的个人级
-        company_q = select(func.count(Workflow.id)).where(Workflow.scope == "company")
-        company = (await db.execute(company_q)).scalar() or 0
-        personal_q = select(func.count(Workflow.id)).where(
-            Workflow.scope == "personal", Workflow.created_by == str(user.uid)
-        )
-        personal = (await db.execute(personal_q)).scalar() or 0
-        total = company + personal
-        platform = 0
-
+    counts = await repo.count_by_scope(user)
     return {
         "success": True,
-        "data": {
-            "total": total,
-            "platform": platform,
-            "company": company,
-            "personal": personal,
-        },
+        "data": counts,
     }
 
 
@@ -205,7 +179,6 @@ async def list_platform_workflows(
     db: AsyncSession = Depends(get_db),
 ):
     """获取平台工作流库（scope=platform 的工作流）。"""
-    from sqlalchemy import select, func
     from yuxi.storage.postgres.models_business import CustomCategory
 
     repo = WorkflowRepository(db)
@@ -603,22 +576,14 @@ async def create_missing_agents(
 
             try:
                 category_id = await _resolve_agent_category_id(slug, db)
-                agent = Agent(
+                agent = await agent_repo.create_auto_agent(
                     slug=normalized_slug,
-                    backend_id="ChatbotAgent",
                     name=role_template.name,
                     description="从角色模板自动创建的 Agent",
-                    config_json={"context": {"system_prompt": role_template.content or ""}},
-                    share_config=DEFAULT_SHARE_CONFIG.copy(),
-                    pics=[],
-                    category_id=category_id,
                     created_by=str(user.uid),
-                    updated_by=str(user.uid),
-                    created_at=utc_now_naive(),
-                    updated_at=utc_now_naive(),
+                    config_json={"context": {"system_prompt": role_template.content or ""}},
+                    category_id=category_id,
                 )
-                db.add(agent)
-                await db.commit()
                 created.append({"slug": normalized_slug, "name": role_template.name, "id": agent.id})
             except Exception as e:
                 logger.warning(f"从角色模板创建 Agent {slug} 失败：{e}")
@@ -635,20 +600,12 @@ async def create_missing_agents(
         name = slug.replace("-", " ").replace("_", " ").title()
 
         try:
-            agent = Agent(
+            agent = await agent_repo.create_auto_agent(
                 slug=slug,
-                backend_id="ChatbotAgent",
                 name=name,
                 description=f"从工作流自动创建的 Agent（{name}）",
-                share_config=DEFAULT_SHARE_CONFIG.copy(),
-                pics=[],
                 created_by=str(user.uid),
-                updated_by=str(user.uid),
-                created_at=utc_now_naive(),
-                updated_at=utc_now_naive(),
             )
-            db.add(agent)
-            await db.commit()
             created.append({"slug": slug, "name": name, "id": agent.id})
         except Exception as e:
             logger.warning(f"创建 Agent {slug} 失败：{e}")
@@ -735,22 +692,14 @@ async def import_platform_workflow(
             continue
         try:
             category_id = await _resolve_agent_category_id(agent_slug, db)
-            agent = Agent(
+            agent = await agent_repo.create_auto_agent(
                 slug=normalized_slug,
-                backend_id="ChatbotAgent",
                 name=role_template.name,
                 description="从工作流导入时自动创建的 Agent",
-                config_json={"context": {"system_prompt": role_template.content or ""}},
-                share_config=DEFAULT_SHARE_CONFIG.copy(),
-                pics=[],
-                category_id=category_id,
                 created_by=str(user.uid),
-                updated_by=str(user.uid),
-                created_at=utc_now_naive(),
-                updated_at=utc_now_naive(),
+                config_json={"context": {"system_prompt": role_template.content or ""}},
+                category_id=category_id,
             )
-            db.add(agent)
-            await db.commit()
             created_agents.append({"slug": normalized_slug, "name": role_template.name})
         except Exception as e:
             logger.warning(f"导入工作流时自动创建 Agent {agent_slug} 失败：{e}")

@@ -1,7 +1,6 @@
 """技能市场业务逻辑"""
 import json
 from typing import Optional, Dict, Any
-from pathlib import Path
 from yuxi.marketplace.repository import MarketplaceRepository
 from yuxi.marketplace.models import (
     SkillMarketEntry, SkillMarketVersion, SkillMarketSubmission, SkillInstallation
@@ -10,6 +9,7 @@ from yuxi.marketplace.scanner import scan_skill_content
 from yuxi.storage.postgres.models_business import Skill
 from yuxi.repositories.user_repository import UserRepository
 from yuxi.utils.datetime_utils import utc_now_naive
+from yuxi.services.skills.personal import materialize_personal_skill_snapshot, read_personal_skill_snapshot
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -94,6 +94,7 @@ class MarketplaceService:
         entry = await self.repo.get_entry_by_slug(slug)
         if not entry:
             raise ValueError(f"市场条目不存在: {slug}")
+        await self.session.refresh(entry, with_for_update=True)
         
         if entry.status != "approved":
             raise ValueError(f"技能未上架或已下架: {slug}")
@@ -140,12 +141,13 @@ class MarketplaceService:
     async def _create_personal_skill_from_snapshot(
         self, user_uid: str, entry: SkillMarketEntry, version: SkillMarketVersion
     ) -> Skill:
-        """从快照创建个人技能"""
+        """从快照创建个人技能：物化文件到用户工作区，并写入 DB 索引。"""
         snapshot = version.content_snapshot
-        
-        # 生成个人技能 slug
         personal_slug = f"market-{entry.slug}-{user_uid[:8]}"
-        
+
+        # 物化技能文件到用户工作区
+        await materialize_personal_skill_snapshot(user_uid, personal_slug, snapshot, db=self.session)
+
         # 创建数据库记录
         skill = Skill(
             slug=personal_slug,
@@ -155,7 +157,7 @@ class MarketplaceService:
             source_scope="personal",
             owner_uid=user_uid,
             author_uid=entry.author_uid,
-            dir_path=f"market/{entry.slug}",  # 简化处理
+            dir_path=personal_slug,
             market_entry_id=entry.id,
             market_version_id=version.id,
             version=version.version,
@@ -167,18 +169,18 @@ class MarketplaceService:
             created_by=user_uid,
             updated_by=user_uid,
         )
-        
+
         self.session.add(skill)
         await self.session.flush()
-        
+
         return skill
 
     async def _update_personal_skill_from_snapshot(
         self, user_uid: str, entry: SkillMarketEntry, version: SkillMarketVersion
     ) -> None:
-        """从快照更新个人技能"""
+        """从快照更新个人技能：刷新磁盘文件并同步 DB 索引。"""
         from sqlalchemy import select, and_
-        
+
         # 查找用户的个人技能
         result = await self.session.execute(
             select(Skill).where(
@@ -190,9 +192,12 @@ class MarketplaceService:
             )
         )
         skill = result.scalar_one_or_none()
-        
+
         if skill:
             snapshot = version.content_snapshot
+            # 刷新磁盘文件
+            await materialize_personal_skill_snapshot(user_uid, skill.slug, snapshot, replace_existing=True, db=self.session)
+            # 同步 DB 索引
             skill.name = entry.title
             skill.description = entry.description
             skill.version = version.version
@@ -297,6 +302,7 @@ class MarketplaceService:
         scan_result = scan_skill_content(
             skill_md=snapshot.get("skill_md", ""),
             scripts=snapshot.get("scripts"),
+            files=snapshot.get("files"),
         )
 
         # 创建提交记录
@@ -355,6 +361,7 @@ class MarketplaceService:
         scan_result = scan_skill_content(
             skill_md=snapshot.get("skill_md", ""),
             scripts=snapshot.get("scripts"),
+            files=snapshot.get("files"),
         )
 
         # 创建提交记录
@@ -483,16 +490,8 @@ class MarketplaceService:
             "scripts": {},  # 脚本内容，用于安全扫描
         }
 
-        # 读取 SKILL.md 和脚本内容用于安全扫描
-        if skill.dir_path:
-            skill_dir = Path(skill.dir_path)
-            skill_md_path = skill_dir / "SKILL.md"
-            if skill_md_path.exists():
-                snapshot["skill_md"] = skill_md_path.read_text(encoding="utf-8")
-
-            scripts_dir = skill_dir / "scripts"
-            if scripts_dir.is_dir():
-                for py_file in scripts_dir.glob("*.py"):
-                    snapshot["scripts"][py_file.name] = py_file.read_text(encoding="utf-8")
+        if skill.source_type != "personal" or not skill.owner_uid:
+            raise ValueError("市场提交需要有明确 Owner 的个人技能")
+        snapshot.update(await read_personal_skill_snapshot(skill.owner_uid, skill.slug))
 
         return snapshot

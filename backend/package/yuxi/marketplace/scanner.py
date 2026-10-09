@@ -62,6 +62,42 @@ class ScanResult:
         }
 
 
+def scan_skill_content(
+    skill_md: str,
+    scripts: dict[str, str] | None = None,
+    files: dict[str, str] | None = None,
+) -> ScanResult:
+    """扫描技能内容
+
+    Args:
+        skill_md: SKILL.md 文件内容
+        scripts: 脚本文件名 -> 内容映射
+        files: 其他分发文本相对路径 -> 内容映射
+
+    Returns:
+        ScanResult 扫描结果
+    """
+    findings: list[Finding] = []
+
+    # 扫描 SKILL.md
+    findings.extend(_scan_text(skill_md, filename="SKILL.md"))
+
+    # 扫描全部分发文本，目录位置不能绕过 Python AST 检测。
+    for contents in (scripts, files):
+        for name, content in (contents or {}).items():
+            findings.extend(_scan_text(content, filename=name))
+            if name.endswith(".py"):
+                findings.extend(_scan_python(content, filename=name))
+
+    score = _compute_score(findings)
+    return ScanResult(
+        score=score,
+        severity=_severity_label(score),
+        recommendation=_recommendation(score),
+        findings=findings,
+    )
+
+
 # ── 风险评分权重 ──────────────────────────────────────────────────────────────
 
 _SEVERITY_WEIGHT: dict[Severity, int] = {
@@ -333,40 +369,6 @@ def _scan_python(source: str, filename: str = "") -> list[Finding]:
                 ))
 
     return findings
-
-
-def scan_skill_content(
-    skill_md: str,
-    scripts: dict[str, str] | None = None,
-) -> ScanResult:
-    """扫描技能内容
-
-    Args:
-        skill_md: SKILL.md 文件内容
-        scripts: 脚本文件名 -> 内容映射
-
-    Returns:
-        ScanResult 扫描结果
-    """
-    findings: list[Finding] = []
-
-    # 扫描 SKILL.md
-    findings.extend(_scan_text(skill_md, filename="SKILL.md"))
-
-    # 扫描 Python 脚本
-    if scripts:
-        for name, content in scripts.items():
-            findings.extend(_scan_text(content, filename=name))
-            if name.endswith(".py"):
-                findings.extend(_scan_python(content, filename=name))
-
-    score = _compute_score(findings)
-    return ScanResult(
-        score=score,
-        severity=_severity_label(score),
-        recommendation=_recommendation(score),
-        findings=findings,
-    )
 
 
 def scan_skill_directory(skill_dir: Path) -> ScanResult:

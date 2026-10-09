@@ -199,10 +199,12 @@ class AgentRepository:
         result = await self.db.execute(stmt)
         return {row[0]: row[1] for row in result.fetchall()}
 
-    async def list_visible_subagents(self, *, user: User) -> list[Agent]:
-        result = await self.db.execute(
-            select(Agent).where(Agent.is_subagent.is_(True)).order_by(Agent.name.asc(), Agent.id.asc())
-        )
+    async def list_visible_subagents(self, *, user: User, category_id: int | None = None) -> list[Agent]:
+        stmt = select(Agent).where(Agent.is_subagent.is_(True))
+        if category_id is not None:
+            stmt = stmt.where(Agent.category_id == category_id)
+        stmt = stmt.order_by(Agent.name.asc(), Agent.id.asc())
+        result = await self.db.execute(stmt)
         agents = list(result.scalars().all())
         if user.role == "superadmin":
             return agents
@@ -405,6 +407,35 @@ class AgentRepository:
     async def delete(self, *, agent: Agent) -> None:
         await self.db.delete(agent)
         await self.db.commit()
+
+    async def create_auto_agent(
+        self,
+        *,
+        slug: str,
+        name: str,
+        description: str,
+        created_by: str,
+        config_json: dict | None = None,
+        category_id: int | None = None,
+    ) -> Agent:
+        """从工作流或角色模板自动创建 Agent，封装 db.add + commit。"""
+        agent = Agent(
+            slug=slug,
+            backend_id="ChatbotAgent",
+            name=name,
+            description=description,
+            config_json=config_json,
+            share_config=DEFAULT_SHARE_CONFIG.copy(),
+            pics=[],
+            category_id=category_id,
+            created_by=created_by,
+            updated_by=created_by,
+            created_at=utc_now_naive(),
+            updated_at=utc_now_naive(),
+        )
+        self.db.add(agent)
+        await self.db.commit()
+        return agent
 
     async def serialize(
         self,

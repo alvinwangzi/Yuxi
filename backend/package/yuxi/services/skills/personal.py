@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.agents.backends.paths import VIRTUAL_PATH_PREFIX
@@ -20,6 +21,9 @@ from yuxi.services.skills.package import (
     copy_skill_snapshot,
     is_valid_skill_slug,
     parse_skill_dir_metadata,
+    parse_skill_markdown,
+    rewrite_frontmatter_slug,
+    read_skill_text_snapshot,
     skill_tree_contains_symlink,
     validated_skill_file_parts,
 )
@@ -186,6 +190,63 @@ async def delete_personal_skill(uid: str, slug: str, *, db: AsyncSession | None 
         row = await repo.get_by_slug_and_owner(slug, uid)
         if row is not None:
             await repo.delete(row)
+
+
+async def read_personal_skill_snapshot(uid: str, slug: str) -> dict:
+    """在个人文件 Owner 内读取市场提交快照，仅返回内容。"""
+    target = _resolve_personal_skill_dir(_personal_skills_root(uid), slug)
+    snapshot = await asyncio.to_thread(read_skill_text_snapshot, target)
+    parsed_slug, *_ = parse_skill_markdown(snapshot["skill_md"])
+    if parsed_slug != slug:
+        raise ValueError("个人技能标识与目录不一致")
+    return snapshot
+
+
+async def materialize_personal_skill_snapshot(
+    uid: str, slug: str, snapshot: dict, *, replace_existing: bool = False, db: AsyncSession | None = None
+) -> None:
+    """在个人文件边界发布完整快照，数据库失败恢复原版本，不向调用方暴露宿主路径。"""
+    publication = asyncio.create_task(
+        asyncio.to_thread(_replace_market_snapshot, uid, slug, snapshot, replace_existing)
+    )
+    cancelled = False
+    # 线程不能随协程取消；必须等交换结束后恢复文件，避免漏掉事务补偿。
+    while not publication.done():
+        try:
+            await asyncio.shield(publication)
+        except asyncio.CancelledError:
+            cancelled = True
+    finish, undo = publication.result()
+    if cancelled:
+        undo()
+        raise asyncio.CancelledError
+    if db is None:
+        finish()
+        return
+    completed = False
+
+    def committed(_session):
+        """数据库成功后清除本次私有备份。"""
+        nonlocal completed
+        if not completed:
+            finish()
+            completed = True
+
+    def rolled_back(_session):
+        """数据库失败时撤销本次文件发布。"""
+        nonlocal completed
+        if not completed:
+            undo()
+            completed = True
+
+    def transaction_ended(_session, transaction):
+        """会话取消关闭也要补偿；忽略 flush 产生的内部子事务。"""
+        if transaction.parent is None:
+            rolled_back(_session)
+
+    event.listen(db.sync_session, "after_commit", committed)
+    event.listen(db.sync_session, "after_rollback", rolled_back)
+    event.listen(db.sync_session, "after_transaction_end", transaction_ended)
 
 
 def _scan_personal_skills(uid: str) -> list[ResolvedSkill]:
@@ -370,6 +431,84 @@ async def _sync_personal_skills_to_db(db: AsyncSession, uid: str, items: list[Re
         except Exception as exc:
             logger.warning(f"回填个人 Skill 到 DB 失败: uid={uid}, slug={item.slug}, error={exc}")
     await db.flush()
+
+
+def _replace_market_snapshot(uid, slug, snapshot, replace_existing):
+    """先校验全部路径并写 staging，再交换目录；失败不删除原版本。"""
+    plan = _market_snapshot_plan(snapshot)
+    parse_skill_markdown(snapshot.get("skill_md", ""))
+    plan = [
+        (parts, rewrite_frontmatter_slug(content, slug) if parts == ("SKILL.md",) else content)
+        for parts, content in plan
+    ]
+    if not is_valid_skill_slug(slug):
+        raise ValueError("无效 skill slug")
+    root = _personal_skills_root(uid)
+    target = _resolve_personal_skill_dir(root, slug)
+    if target.exists() and (not replace_existing or skill_tree_contains_symlink(target)):
+        raise ValueError("个人 Skill 已存在或包含符号链接")
+    staging = Path(tempfile.mkdtemp(prefix=".market-stage-", dir=root))
+    backup = root / (".market-backup-" + uuid.uuid4().hex)
+    had_original = target.exists()
+    try:
+        for parts, content in plan:
+            item = staging.joinpath(*parts)
+            item.parent.mkdir(parents=True, exist_ok=True)
+            item.write_text(content, encoding="utf-8")
+        if had_original:
+            target.rename(backup)
+        try:
+            staging.rename(target)
+        except BaseException:
+            if had_original:
+                backup.rename(target)
+            raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+    def finish():
+        """只清理本操作创建的备份。"""
+        if backup.exists():
+            shutil.rmtree(backup)
+
+    def undo():
+        """撤销本操作的目标，并恢复旧目录。"""
+        if target.is_symlink():
+            raise ValueError("个人 Skill 目标被替换为符号链接")
+        if target.exists():
+            shutil.rmtree(target)
+        if had_original and backup.exists():
+            backup.rename(target)
+
+    return finish, undo
+
+
+def _market_snapshot_plan(snapshot):
+    """快照只含相对路径和文本，拒绝越界、目录冲突或重复写同一文件。"""
+    if not isinstance(snapshot, dict):
+        raise ValueError("无效 Skill 快照")
+    contents = {}
+    markdown = snapshot.get("skill_md", "")
+    if not isinstance(markdown, str):
+        raise ValueError("无效 SKILL.md 内容")
+    if markdown:
+        contents[("SKILL.md",)] = markdown
+    for group, prefix in (("scripts", ("scripts",)), ("files", ())):
+        items = snapshot.get(group) or {}
+        if not isinstance(items, dict):
+            raise ValueError("无效 Skill 文件集合")
+        for name, content in items.items():
+            if not isinstance(name, str) or ":" in name or any(part in ("", ".", "..") for part in name.split("/")):
+                raise ValueError("非法 Skill 文件路径")
+            parts = prefix + validated_skill_file_parts(name)
+            if not isinstance(content, str) or parts in contents:
+                raise ValueError("无效或重复的 Skill 文件")
+            contents[parts] = content
+    for path in contents:
+        if any(path[:index] in contents for index in range(1, len(path))):
+            raise ValueError("Skill 文件与目录冲突")
+    return list(contents.items())
 
 
 def _personal_skills_root(uid: str) -> Path:

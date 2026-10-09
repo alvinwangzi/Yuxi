@@ -7,6 +7,7 @@ from datetime import timedelta, UTC
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yuxi.storage.postgres.models_business import (
+    User,
     Workflow,
     WorkflowRun,
     WorkflowStepRun,
@@ -94,6 +95,41 @@ class WorkflowRepository:
     async def delete_workflow(self, workflow: Workflow) -> None:
         await self.db.delete(workflow)
         await self.db.flush()
+
+    async def list_selectable_for_user(self, user: User, *, limit: int = 200) -> list[Workflow]:
+        """列出用户可选择的工作流：管理员返回所有非平台工作流，普通用户返回公司级 + 自己的个人级。"""
+        stmt = select(Workflow).where(Workflow.scope != "platform", _workflow_visibility(user)).order_by(Workflow.updated_at.desc()).limit(limit)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_by_scope(self, user: User | None = None) -> dict[str, int]:
+        """按 scope 分组统计工作流数量；非管理员只统计可见范围（公司级 + 自己的个人级）。"""
+        is_admin = user is not None and user.role in ("admin", "superadmin")
+        base = select(Workflow.scope, func.count(Workflow.id))
+        if user is not None and not is_admin:
+            base = base.where(
+                or_(
+                    Workflow.scope == "company",
+                    (Workflow.scope == "personal") & (Workflow.created_by == str(user.uid)),
+                )
+            )
+        result = await self.db.execute(base.group_by(Workflow.scope))
+        counts = {row[0]: row[1] for row in result.fetchall()}
+        if is_admin:
+            return {
+                "total": sum(counts.values()),
+                "platform": counts.get("platform", 0),
+                "company": counts.get("company", 0),
+                "personal": counts.get("personal", 0),
+            }
+        company = counts.get("company", 0)
+        personal = counts.get("personal", 0)
+        return {
+            "total": company + personal,
+            "platform": 0,
+            "company": company,
+            "personal": personal,
+        }
 
     # ── 运行记录 ──
 
@@ -562,7 +598,7 @@ class WorkflowRepository:
             run.resume_state = {**(run.resume_state or {}), "cancel_propagation_pending": False}
 
     async def get_active_run(self, workflow_id: int) -> WorkflowRun | None:
-        """等待中的运行仍占据当前工作流的活跃运行边界。"""
+        """检查工作流是否有正在执行中的运行记录（含等待状态）。"""
         result = await self.db.execute(
             select(WorkflowRun)
             .where(

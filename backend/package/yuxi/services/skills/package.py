@@ -60,6 +60,33 @@ def parse_skill_dir_metadata(source_skill_dir: Path) -> dict[str, Any]:
     }
 
 
+def read_skill_text_snapshot(source_dir: Path) -> dict[str, Any]:
+    """递归读取不含符号链接的文本包，覆盖嵌套脚本和模板，保留既有文本快照格式。"""
+    if source_dir.is_symlink():
+        raise ValueError("Skill 来源不能是符号链接")
+    root = source_dir.resolve()
+    result = {"skill_md": "", "scripts": {}, "files": {}}
+    if not root.is_dir():
+        return result
+    for item in sorted(root.rglob("*")):
+        if item.is_symlink():
+            raise ValueError("Skill 来源不能包含符号链接")
+        if not item.is_file():
+            continue
+        name = item.relative_to(root).as_posix()
+        try:
+            content = item.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if name == "SKILL.md":
+            result["skill_md"] = content
+        elif name.startswith("scripts/"):
+            result["scripts"][name[len("scripts/"):]] = content
+        else:
+            result["files"][name] = content
+    return result
+
+
 def parse_skill_markdown(content: str) -> tuple[str, str, str, dict[str, Any]]:
     """解析并校验 Skill 根文件的前置元数据。"""
     frontmatter_raw, _body = split_skill_frontmatter(content)
